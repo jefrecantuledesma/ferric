@@ -3,7 +3,7 @@ use crate::metadata::AudioMetadata;
 use crate::utils;
 use anyhow::{anyhow, Context, Result};
 use csv::ReaderBuilder;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -20,10 +20,10 @@ pub struct PlaylistImportOptions {
 
 #[derive(Debug)]
 struct PlaylistEntry {
-    artist: String,
-    title: String,
-    normalized_artist: String,
-    normalized_title: String,
+    artist_raw: String,
+    title_raw: String,
+    artist_keys: Vec<String>,
+    title_keys: Vec<String>,
 }
 
 /// Build an .m3u playlist by matching Exportify CSV rows to local audio files.
@@ -41,30 +41,58 @@ pub fn run(options: PlaylistImportOptions) -> Result<()> {
         return Ok(());
     }
 
-    let index = build_library_index(&options.library_dir, options.verbose)?;
+    let (artist_title_index, title_index, artist_lookup) =
+        build_library_index(&options.library_dir, options.verbose)?;
 
     let mut matched_paths = Vec::with_capacity(entries.len());
     let mut missing = Vec::new();
 
     for entry in &entries {
-        let key = (
-            entry.normalized_artist.clone(),
-            entry.normalized_title.clone(),
-        );
-        if let Some(paths) = index.get(&key) {
-            let path = &paths[0];
+        let mut matched: Option<(PathBuf, &'static str)> = None;
+
+        'outer: for artist_key in &entry.artist_keys {
+            for title_key in &entry.title_keys {
+                let lookup_key = (artist_key.clone(), title_key.clone());
+                if let Some(paths) = artist_title_index.get(&lookup_key) {
+                    matched = Some((paths[0].clone(), "artist-title"));
+                    break 'outer;
+                }
+            }
+        }
+
+        if matched.is_none() {
+            for title_key in &entry.title_keys {
+                if let Some(paths) = title_index.get(title_key) {
+                    if paths.len() == 1 {
+                        let candidate = &paths[0];
+                        if let Some(artists) = artist_lookup.get(candidate) {
+                            if artists
+                                .iter()
+                                .any(|artist| entry.artist_keys.contains(artist))
+                            {
+                                matched = Some((candidate.clone(), "title-only"));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some((path, strategy)) = matched {
             logger::debug(
                 &format!(
-                    "Matched '{}' - '{}' to {}",
-                    entry.artist,
-                    entry.title,
-                    path.display()
+                    "Matched '{}' - '{}' to {} ({})",
+                    entry.artist_raw,
+                    entry.title_raw,
+                    path.display(),
+                    strategy
                 ),
                 options.verbose,
             );
-            matched_paths.push(path.clone());
+            matched_paths.push(path);
         } else {
-            missing.push(format!("{} - {}", entry.artist, entry.title));
+            missing.push(format!("{} - {}", entry.artist_raw, entry.title_raw));
         }
     }
 
@@ -132,14 +160,25 @@ fn load_playlist_entries(path: &Path) -> Result<Vec<PlaylistEntry>> {
             continue;
         }
 
-        let normalized_artist = utils::normalize_for_comparison(&artist);
-        let normalized_title = utils::normalize_for_comparison(&title);
+        let mut artist_keys = expand_artist_keys(&artist);
+        if artist_keys.is_empty() {
+            let fallback = utils::normalize_for_comparison(&artist);
+            if !fallback.is_empty() {
+                artist_keys.push(fallback);
+            }
+        }
+
+        let title_keys = expand_title_variants(&title, &artist_keys);
+
+        if artist_keys.is_empty() || title_keys.is_empty() {
+            continue;
+        }
 
         entries.push(PlaylistEntry {
-            artist,
-            title,
-            normalized_artist,
-            normalized_title,
+            artist_raw: artist,
+            title_raw: title,
+            artist_keys,
+            title_keys,
         });
     }
 
@@ -160,9 +199,15 @@ fn strip_bom(value: &str) -> &str {
 fn build_library_index(
     library_dir: &Path,
     verbose: bool,
-) -> Result<HashMap<(String, String), Vec<PathBuf>>> {
+) -> Result<(
+    HashMap<(String, String), Vec<PathBuf>>,
+    HashMap<String, Vec<PathBuf>>,
+    HashMap<PathBuf, Vec<String>>,
+)> {
     logger::info("Indexing local audio library...");
     let mut map: HashMap<(String, String), Vec<PathBuf>> = HashMap::new();
+    let mut title_map: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    let mut artist_lookup: HashMap<PathBuf, Vec<String>> = HashMap::new();
 
     for entry in WalkDir::new(library_dir)
         .into_iter()
@@ -176,20 +221,59 @@ fn build_library_index(
 
         match AudioMetadata::from_file(&path) {
             Ok(metadata) => {
-                let artist =
-                    utils::normalize_for_comparison(&metadata.get_organizing_artist(false));
-                let title = utils::normalize_for_comparison(&metadata.get_title());
-                if artist.is_empty() || title.is_empty() {
+                let track_artist = metadata.get_organizing_artist(true);
+                let album_artist = metadata.get_organizing_artist(false);
+
+                let mut artist_variants = expand_artist_keys(&track_artist);
+                if album_artist != track_artist {
+                    for variant in expand_artist_keys(&album_artist) {
+                        if !artist_variants.contains(&variant) {
+                            artist_variants.push(variant);
+                        }
+                    }
+                }
+
+                if artist_variants.is_empty() {
                     logger::debug(
-                        &format!("Skipping {} due to empty metadata", path.display()),
+                        &format!("Skipping {} due to empty artist metadata", path.display()),
                         verbose,
                     );
                     continue;
                 }
 
-                map.entry((artist, title))
-                    .or_insert_with(Vec::new)
-                    .push(path);
+                artist_lookup.insert(path.clone(), artist_variants.clone());
+
+                let title_variants = expand_title_variants(&metadata.get_title(), &artist_variants);
+                if title_variants.is_empty() {
+                    logger::debug(
+                        &format!("Skipping {} due to empty title metadata", path.display()),
+                        verbose,
+                    );
+                    continue;
+                }
+
+                for title in &title_variants {
+                    let entry = title_map.entry(title.clone()).or_insert_with(Vec::new);
+                    push_unique(entry, &path);
+                }
+
+                for artist in &artist_variants {
+                    for title in &title_variants {
+                        logger::debug(
+                            &format!(
+                                "Indexed track '{}' - '{}' ({})",
+                                artist,
+                                title,
+                                path.display()
+                            ),
+                            verbose,
+                        );
+                        let entry = map
+                            .entry((artist.clone(), title.clone()))
+                            .or_insert_with(Vec::new);
+                        push_unique(entry, &path);
+                    }
+                }
             }
             Err(err) => {
                 logger::error(&format!(
@@ -201,8 +285,8 @@ fn build_library_index(
         }
     }
 
-    logger::success(&format!("Indexed {} unique tracks", map.len()));
-    Ok(map)
+    logger::success(&format!("Indexed {} unique artist/title pairs", map.len()));
+    Ok((map, title_map, artist_lookup))
 }
 
 fn write_m3u(paths: &[PathBuf], output: &Path) -> Result<()> {
@@ -226,4 +310,73 @@ fn default_output_path(csv_path: &Path) -> PathBuf {
     let mut path = csv_path.to_path_buf();
     path.set_extension("m3u");
     path
+}
+
+fn expand_artist_keys(raw: &str) -> Vec<String> {
+    let normalized = utils::normalize_for_comparison(raw);
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let mut seen = HashSet::new();
+    let mut variants = Vec::new();
+    let mut push_variant = |value: &str| {
+        if !value.is_empty() && seen.insert(value.to_string()) {
+            variants.push(value.to_string());
+        }
+    };
+
+    push_variant(&normalized);
+
+    let mut working = normalized.clone();
+    for pattern in &[" feat ", " featuring ", " ft ", " with ", " and "] {
+        working = working.replace(pattern, "|");
+    }
+    for sep in [",", ";", "/", "&", "+"] {
+        working = working.replace(sep, "|");
+    }
+
+    for token in working.split('|') {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() {
+            push_variant(trimmed);
+        }
+    }
+
+    variants
+}
+
+fn expand_title_variants(raw_title: &str, artist_keys: &[String]) -> Vec<String> {
+    let normalized = utils::normalize_for_comparison(raw_title);
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let mut seen = HashSet::new();
+    let mut variants = Vec::new();
+    let mut push_variant = |value: String| {
+        if !value.is_empty() && seen.insert(value.clone()) {
+            variants.push(value);
+        }
+    };
+
+    push_variant(normalized.clone());
+
+    for artist in artist_keys {
+        let prefix = format!("{} ", artist);
+        if normalized.starts_with(&prefix) {
+            let stripped = normalized[prefix.len()..].trim().to_string();
+            if !stripped.is_empty() {
+                push_variant(stripped);
+            }
+        }
+    }
+
+    variants
+}
+
+fn push_unique(vec: &mut Vec<PathBuf>, path: &Path) {
+    if !vec.iter().any(|existing| existing == path) {
+        vec.push(path.to_path_buf());
+    }
 }
