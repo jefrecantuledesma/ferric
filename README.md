@@ -70,6 +70,7 @@ ferric <COMMAND> [OPTIONS]
 6. **dedupe** - Find and remove duplicate files based on metadata
 7. **unified** - Run complete pipeline: convert → sort → normalize
 8. **gen-config** - Generate example configuration file
+9. **playlist-import** - Build .m3u playlists from Exportify CSV exports
 
 ### Global Options
 
@@ -105,6 +106,11 @@ ferric fix-naming -i ~/Music/Library
 #### Find and remove duplicates
 ```bash
 ferric dedupe -d ~/Music/Library
+```
+
+#### Generate an .m3u playlist from Exportify CSV
+```bash
+ferric playlist-import --playlist playlists/Liked_Songs.csv --library ~/Music/Library --output ~/Playlists/Liked_Songs.m3u
 ```
 
 ### Advanced: Quality-Aware Sorting
