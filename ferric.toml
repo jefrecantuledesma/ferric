@@ -1,0 +1,24 @@
+[general]
+threads = 0
+verbose = false
+
+[convert]
+opus_bitrate = 192
+opus_compression = 10
+delete_original = false
+
+[quality]
+lossless_bonus = 10000
+
+[quality.codec_multipliers]
+opus = 1.8
+aac = 1.3
+vorbis = 1.2
+mp3 = 1.0
+wma = 0.9
+
+[naming]
+max_name_length = 128
+lowercase = true
+prefer_artist = false
+include_va = false

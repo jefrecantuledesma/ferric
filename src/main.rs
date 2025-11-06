@@ -1,0 +1,274 @@
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+use ferric::config::Config;
+use ferric::operations::*;
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(name = "ferric")]
+#[command(author, version, about, long_about = None)]
+#[command(about = "High-performance audio library organization tool")]
+struct Cli {
+    /// Path to config file (default: ~/.ferric/ferric.toml or ./ferric.toml)
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
+
+    /// Dry run - show what would be done without making changes
+    #[arg(long, global = true)]
+    dry_run: bool,
+
+    /// Verbose output
+    #[arg(short, long, global = true)]
+    verbose: bool,
+
+    /// Custom log file path (default: ~/.ferric/logs/ferric_TIMESTAMP.log)
+    #[arg(long, global = true)]
+    log_file: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Convert audio files to OPUS format
+    Convert {
+        /// Input directory to scan
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output directory for converted files
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Delete original files after successful conversion
+        #[arg(long)]
+        delete_original: bool,
+    },
+
+    /// Sort files by metadata tags into Artist/Album structure
+    TagSort {
+        /// Input directory to scan
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output library directory
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Move files instead of copying
+        #[arg(long)]
+        r#move: bool,
+    },
+
+    /// Sort files with intelligent quality comparison (only upgrades)
+    Sort {
+        /// Input directory to scan
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output library directory
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Move files instead of copying
+        #[arg(long)]
+        r#move: bool,
+    },
+
+    /// Fix naming issues (apostrophes, case, whitespace)
+    FixNaming {
+        /// Directory to process
+        #[arg(short, long)]
+        input: PathBuf,
+    },
+
+    /// Convert all names to lowercase
+    Lowercase {
+        /// Directory to process
+        #[arg(short, long)]
+        input: PathBuf,
+    },
+
+    /// Find and remove duplicate files based on metadata
+    Dedupe {
+        /// Directory to scan
+        #[arg(short, long)]
+        dir: PathBuf,
+
+        /// Automatically remove duplicates without confirmation
+        #[arg(long)]
+        auto_remove: bool,
+    },
+
+    /// Run unified pipeline: sort -> optional convert -> fix naming
+    Unified {
+        /// Input directory to scan
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output library directory
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Convert to OPUS after sorting (optional)
+        #[arg(long)]
+        convert_opus: bool,
+
+        /// Delete original files after conversion (requires --convert-opus)
+        #[arg(long)]
+        destructive: bool,
+
+        /// Always convert regardless of quality (requires --convert-opus)
+        #[arg(long)]
+        always_convert: bool,
+
+        /// Convert higher quality down to OPUS (e.g., FLAC to OPUS to save space, requires --convert-opus)
+        #[arg(long)]
+        convert_down: bool,
+    },
+
+    /// Generate example config file
+    GenConfig {
+        /// Output path for config file
+        #[arg(short, long, default_value = "ferric.toml")]
+        output: PathBuf,
+    },
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    // Load configuration
+    let config = if let Some(config_path) = cli.config {
+        Config::from_file(&config_path)?
+    } else {
+        Config::load_or_default()
+    };
+
+    // Initialize logging
+    let log_path = ferric::logger::init_logger(cli.log_file)?;
+    ferric::logger::info(&format!("Log file: {}", log_path.display()));
+
+    // Execute command
+    let result = match cli.command {
+        Commands::Convert {
+            input,
+            output,
+            delete_original,
+        } => {
+            let opts = convert::ConvertOptions {
+                input_dir: input,
+                output_dir: output,
+                delete_original,
+                always_convert: config.convert.always_convert,
+                convert_down: config.convert.convert_down,
+                dry_run: cli.dry_run,
+                verbose: cli.verbose,
+                config,
+            };
+            convert::run(opts).map(|_| ())
+        }
+
+        Commands::TagSort {
+            input,
+            output,
+            r#move,
+        } => {
+            let opts = tag_sort::TagSortOptions {
+                input_dir: input,
+                output_dir: output,
+                do_move: r#move,
+                dry_run: cli.dry_run,
+                verbose: cli.verbose,
+                config,
+            };
+            tag_sort::run(opts).map(|_| ())
+        }
+
+        Commands::Sort {
+            input,
+            output,
+            r#move,
+        } => {
+            let opts = sort::SortOptions {
+                input_dir: input,
+                output_dir: output,
+                do_move: r#move,
+                dry_run: cli.dry_run,
+                verbose: cli.verbose,
+                config,
+            };
+            sort::run(opts).map(|_| ())
+        }
+
+        Commands::FixNaming { input } => {
+            let opts = fix_naming::FixNamingOptions {
+                input_dir: input,
+                dry_run: cli.dry_run,
+                verbose: cli.verbose,
+            };
+            fix_naming::run(opts).map(|_| ())
+        }
+
+        Commands::Lowercase { input } => {
+            let opts = lowercase::LowercaseOptions {
+                input_dir: input,
+                dry_run: cli.dry_run,
+                verbose: cli.verbose,
+            };
+            lowercase::run(opts).map(|_| ())
+        }
+
+        Commands::Dedupe { dir, auto_remove } => {
+            let opts = dedupe::DedupeOptions {
+                input_dir: dir,
+                dry_run: cli.dry_run,
+                verbose: cli.verbose,
+                auto_remove,
+                config,
+            };
+            dedupe::run(opts).map(|_| ())
+        }
+
+        Commands::Unified {
+            input,
+            output,
+            convert_opus,
+            destructive,
+            always_convert,
+            convert_down,
+        } => {
+            let opts = unified::UnifiedOptions {
+                input_dir: input,
+                output_dir: output,
+                convert_opus,
+                destructive,
+                always_convert,
+                convert_down,
+                dry_run: cli.dry_run,
+                verbose: cli.verbose,
+                config,
+            };
+            unified::run(opts)
+        }
+
+        Commands::GenConfig { output } => {
+            let example = Config::generate_example();
+            std::fs::write(&output, example)?;
+            ferric::logger::success(&format!("Generated example config at: {}", output.display()));
+            Ok(())
+        }
+    };
+
+    match result {
+        Ok(_) => {
+            ferric::logger::success("\nOperation completed successfully!");
+            Ok(())
+        }
+        Err(e) => {
+            ferric::logger::error(&format!("\nOperation failed: {}", e));
+            Err(e)
+        }
+    }
+}
