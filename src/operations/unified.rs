@@ -7,7 +7,7 @@ use std::path::PathBuf;
 pub struct UnifiedOptions {
     pub input_dir: PathBuf,
     pub output_dir: PathBuf,
-    pub convert_opus: bool,
+    pub output_format: Option<String>,
     pub destructive: bool,
     pub always_convert: bool,
     pub convert_down: bool,
@@ -24,9 +24,16 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
 
     logger::info(&format!("Input directory: {}", options.input_dir.display()));
     logger::info(&format!("Output directory: {}", options.output_dir.display()));
-    logger::info(&format!("Convert to OPUS: {}", if options.convert_opus { "YES" } else { "NO" }));
-    if options.convert_opus && options.destructive {
-        logger::info(&format!("Destructive mode: YES - will delete originals"));
+
+    let should_convert = options.output_format.is_some();
+    if should_convert {
+        let format = options.output_format.as_ref().unwrap().to_uppercase();
+        logger::info(&format!("Convert to: {}", format));
+        if options.destructive {
+            logger::info("Destructive mode: YES - will delete originals");
+        }
+    } else {
+        logger::info("Convert: NO");
     }
 
     if options.dry_run {
@@ -37,10 +44,11 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
     if !options.dry_run {
         logger::warning("\nYou are about to run the unified pipeline:");
         logger::info("  1. Sort into Artist/Album structure (quality-aware)");
-        if options.convert_opus {
-            logger::info("  2. Convert to OPUS (only higher quality)");
+        if should_convert {
+            let format = options.output_format.as_ref().unwrap().to_uppercase();
+            logger::info(&format!("  2. Convert to {} (only higher quality)", format));
             if options.destructive {
-                logger::warning("  3. DELETE original non-OPUS files");
+                logger::warning(&format!("  3. DELETE original non-{} files", format));
             }
             logger::info(&format!("  {}. Normalize all naming", if options.destructive { "4" } else { "3" }));
         } else {
@@ -57,7 +65,7 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
     }
 
     let mut total_stats = OperationStats::new();
-    let total_steps = if options.convert_opus { 3 } else { 2 };
+    let total_steps = if should_convert { 3 } else { 2 };
 
     // Step 1: Sort by metadata
     logger::stage(&format!("\n[1/{}] Sorting by metadata...", total_steps));
@@ -84,13 +92,15 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
         }
     }
 
-    // Step 2: Convert to OPUS (optional)
+    // Step 2: Convert (optional)
     let mut current_step = 2;
-    if options.convert_opus {
-        logger::stage(&format!("\n[{}/{}] Converting to OPUS...", current_step, total_steps));
+    if should_convert {
+        let format = options.output_format.as_ref().unwrap().to_uppercase();
+        logger::stage(&format!("\n[{}/{}] Converting to {}...", current_step, total_steps, format));
         let convert_opts = convert::ConvertOptions {
             input_dir: options.output_dir.clone(),
             output_dir: options.output_dir.clone(),
+            output_format: options.output_format.clone(),
             delete_original: options.destructive,
             always_convert: options.always_convert,
             convert_down: options.convert_down,

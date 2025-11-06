@@ -34,6 +34,10 @@ pub struct GeneralConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConvertConfig {
+    /// Output format (opus, aac, mp3, vorbis)
+    #[serde(default = "default_output_format")]
+    pub output_format: String,
+
     /// Target OPUS bitrate in kbps
     #[serde(default = "default_opus_bitrate")]
     pub opus_bitrate: u32,
@@ -41,6 +45,18 @@ pub struct ConvertConfig {
     /// OPUS compression level (0-10, higher = better compression but slower)
     #[serde(default = "default_opus_compression")]
     pub opus_compression: u8,
+
+    /// Target AAC bitrate in kbps
+    #[serde(default = "default_aac_bitrate")]
+    pub aac_bitrate: u32,
+
+    /// Target MP3 bitrate in kbps
+    #[serde(default = "default_mp3_bitrate")]
+    pub mp3_bitrate: u32,
+
+    /// Target Vorbis quality (-1 to 10, higher = better quality)
+    #[serde(default = "default_vorbis_quality")]
+    pub vorbis_quality: i8,
 
     /// Delete original files after successful conversion
     #[serde(default)]
@@ -50,7 +66,7 @@ pub struct ConvertConfig {
     #[serde(default)]
     pub always_convert: bool,
 
-    /// Convert higher quality down to OPUS (e.g., FLAC to OPUS to save space)
+    /// Convert higher quality down (e.g., FLAC to lossy to save space)
     #[serde(default)]
     pub convert_down: bool,
 }
@@ -108,12 +124,28 @@ fn default_threads() -> usize {
     0 // 0 means auto-detect
 }
 
+fn default_output_format() -> String {
+    "opus".to_string()
+}
+
 fn default_opus_bitrate() -> u32 {
     192
 }
 
 fn default_opus_compression() -> u8 {
     10
+}
+
+fn default_aac_bitrate() -> u32 {
+    256
+}
+
+fn default_mp3_bitrate() -> u32 {
+    320
+}
+
+fn default_vorbis_quality() -> i8 {
+    6
 }
 
 fn default_lossless_bonus() -> u32 {
@@ -171,8 +203,12 @@ impl Default for GeneralConfig {
 impl Default for ConvertConfig {
     fn default() -> Self {
         Self {
+            output_format: default_output_format(),
             opus_bitrate: default_opus_bitrate(),
             opus_compression: default_opus_compression(),
+            aac_bitrate: default_aac_bitrate(),
+            mp3_bitrate: default_mp3_bitrate(),
+            vorbis_quality: default_vorbis_quality(),
             delete_original: false,
             always_convert: false,
             convert_down: false,

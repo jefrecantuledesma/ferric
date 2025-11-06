@@ -15,6 +15,7 @@ use walkdir::WalkDir;
 pub struct ConvertOptions {
     pub input_dir: PathBuf,
     pub output_dir: PathBuf,
+    pub output_format: Option<String>,
     pub delete_original: bool,
     pub always_convert: bool,
     pub convert_down: bool,
@@ -23,15 +24,25 @@ pub struct ConvertOptions {
     pub config: Config,
 }
 
-/// Convert audio files to OPUS format
+/// Convert audio files to specified format
 pub fn run(options: ConvertOptions) -> Result<OperationStats> {
-    logger::stage("Starting OPUS conversion");
+    // Determine output format (flag > config > default)
+    let format = options.output_format
+        .clone()
+        .unwrap_or_else(|| options.config.convert.output_format.clone())
+        .to_lowercase();
+
+    logger::stage(&format!("Starting {} conversion", format.to_uppercase()));
     logger::info(&format!("Input directory: {}", options.input_dir.display()));
     logger::info(&format!("Output directory: {}", options.output_dir.display()));
-    logger::info(&format!(
-        "Target: OPUS {}kbps VBR",
-        options.config.convert.opus_bitrate
-    ));
+
+    match format.as_str() {
+        "opus" => logger::info(&format!("Target: OPUS {}kbps VBR", options.config.convert.opus_bitrate)),
+        "aac" => logger::info(&format!("Target: AAC {}kbps", options.config.convert.aac_bitrate)),
+        "mp3" => logger::info(&format!("Target: MP3 {}kbps CBR", options.config.convert.mp3_bitrate)),
+        "vorbis" => logger::info(&format!("Target: Vorbis quality {}", options.config.convert.vorbis_quality)),
+        _ => anyhow::bail!("Unsupported output format: {}. Supported formats: opus, aac, mp3, vorbis", format),
+    }
 
     if options.dry_run {
         logger::warning("DRY RUN MODE - No conversions will be performed");
@@ -74,19 +85,23 @@ pub fn run(options: ConvertOptions) -> Result<OperationStats> {
             stats.processed += 1;
         }
 
-        // Skip if already OPUS
+        // Skip if already in target format
         if let Some(ext) = utils::get_extension(file) {
-            if ext == "opus" {
-                logger::debug(&format!("Skipping (already OPUS): {}", file.display()), options.verbose);
+            if ext == format {
+                logger::debug(&format!("Skipping (already {}): {}", format.to_uppercase(), file.display()), options.verbose);
                 let mut stats = stats.lock().unwrap();
-                stats.add_skipped(file.clone(), "already OPUS".to_string());
+                stats.add_skipped(file.clone(), format!("already {}", format.to_uppercase()));
                 return;
             }
         }
 
-        // Calculate output path
+        // Calculate output path with correct extension
         let relative_path = file.strip_prefix(&options.input_dir).unwrap_or(file);
-        let output_file = options.output_dir.join(relative_path).with_extension("opus");
+        let extension = match format.as_str() {
+            "vorbis" => "ogg", // Vorbis uses .ogg container
+            _ => &format,
+        };
+        let output_file = options.output_dir.join(relative_path).with_extension(extension);
 
         // Check if we should convert based on quality comparison
         if output_file.exists() && !options.always_convert {
@@ -98,9 +113,14 @@ pub fn run(options: ConvertOptions) -> Result<OperationStats> {
                             let input_quality = quality::calculate_quality_score(&input_meta, &options.config);
                             let output_quality = quality::calculate_quality_score(&output_meta, &options.config);
 
-                            // Calculate target OPUS quality
-                            let target_opus_quality = (options.config.convert.opus_bitrate as f64
-                                * options.config.quality.codec_multipliers.opus) as u32;
+                            // Calculate target quality based on format
+                            let target_quality = match format.as_str() {
+                                "opus" => (options.config.convert.opus_bitrate as f64 * options.config.quality.codec_multipliers.opus) as u32,
+                                "aac" => (options.config.convert.aac_bitrate as f64 * options.config.quality.codec_multipliers.aac) as u32,
+                                "mp3" => (options.config.convert.mp3_bitrate as f64 * options.config.quality.codec_multipliers.mp3) as u32,
+                                "vorbis" => ((options.config.convert.vorbis_quality as f64 * 32.0) * options.config.quality.codec_multipliers.vorbis) as u32,
+                                _ => 0,
+                            };
 
                             if input_quality > output_quality {
                                 // Input is better quality, should convert (upgrade)
@@ -108,17 +128,17 @@ pub fn run(options: ConvertOptions) -> Result<OperationStats> {
                                     &format!("Will upgrade: {} (quality {} > {})", file.display(), input_quality, output_quality),
                                     options.verbose,
                                 );
-                            } else if input_quality < target_opus_quality && !options.convert_down {
+                            } else if input_quality < target_quality && !options.convert_down {
                                 // Input would be downgrade and convert_down not enabled
                                 logger::debug(
                                     &format!("Skipping (would be downgrade, quality {} < target {}): {}",
-                                        input_quality, target_opus_quality, file.display()),
+                                        input_quality, target_quality, file.display()),
                                     options.verbose,
                                 );
                                 let mut stats = stats.lock().unwrap();
                                 stats.add_skipped(
                                     file.clone(),
-                                    format!("would be downgrade (quality {} < target {})", input_quality, target_opus_quality)
+                                    format!("would be downgrade (quality {} < target {})", input_quality, target_quality)
                                 );
                                 return;
                             } else if input_quality == output_quality && !options.convert_down {
@@ -156,7 +176,7 @@ pub fn run(options: ConvertOptions) -> Result<OperationStats> {
             }
 
             // Convert using ffmpeg
-            match convert_file(file, &output_file, &options.config) {
+            match convert_file(file, &output_file, &format, &options.config) {
                 Ok(_) => {
                     logger::debug(&format!("Converted: {}", output_file.display()), options.verbose);
                     let mut stats = stats.lock().unwrap();
@@ -184,7 +204,7 @@ pub fn run(options: ConvertOptions) -> Result<OperationStats> {
 
     // Extract stats from Arc<Mutex<>>
     let stats = Arc::try_unwrap(stats).unwrap().into_inner().unwrap();
-    stats.print_summary("OPUS Conversion");
+    stats.print_summary(&format!("{} Conversion", format.to_uppercase()));
     Ok(stats)
 }
 
@@ -196,24 +216,37 @@ fn check_ffmpeg() -> Result<()> {
     Ok(())
 }
 
-fn convert_file(input: &Path, output: &Path, config: &Config) -> Result<()> {
-    let status = Command::new("ffmpeg")
-        .arg("-i")
-        .arg(input)
-        .arg("-c:a")
-        .arg("libopus")
-        .arg("-b:a")
-        .arg(format!("{}k", config.convert.opus_bitrate))
-        .arg("-vbr")
-        .arg("on")
-        .arg("-compression_level")
-        .arg(config.convert.opus_compression.to_string())
-        .arg("-map_metadata")
-        .arg("0")
+fn convert_file(input: &Path, output: &Path, format: &str, config: &Config) -> Result<()> {
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-i").arg(input);
+
+    match format {
+        "opus" => {
+            cmd.arg("-c:a").arg("libopus")
+                .arg("-b:a").arg(format!("{}k", config.convert.opus_bitrate))
+                .arg("-vbr").arg("on")
+                .arg("-compression_level").arg(config.convert.opus_compression.to_string());
+        }
+        "aac" => {
+            cmd.arg("-c:a").arg("aac")
+                .arg("-b:a").arg(format!("{}k", config.convert.aac_bitrate));
+        }
+        "mp3" => {
+            cmd.arg("-c:a").arg("libmp3lame")
+                .arg("-b:a").arg(format!("{}k", config.convert.mp3_bitrate));
+        }
+        "vorbis" => {
+            cmd.arg("-c:a").arg("libvorbis")
+                .arg("-q:a").arg(config.convert.vorbis_quality.to_string());
+        }
+        _ => anyhow::bail!("Unsupported format: {}", format),
+    }
+
+    cmd.arg("-map_metadata").arg("0")
         .arg("-y") // Overwrite output
-        .arg(output)
-        .output()
-        .context("Failed to execute ffmpeg")?;
+        .arg(output);
+
+    let status = cmd.output().context("Failed to execute ffmpeg")?;
 
     if !status.status.success() {
         anyhow::bail!("ffmpeg failed with status: {}", status.status);

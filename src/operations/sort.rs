@@ -6,8 +6,10 @@ use crate::quality;
 use crate::utils;
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
+use rayon::prelude::*;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use walkdir::WalkDir;
 
 pub struct SortOptions {
@@ -44,6 +46,8 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
 
     logger::info(&format!("Found {} audio files", files.len()));
 
+    // Phase 1: Parallel metadata extraction
+    logger::info("Phase 1/2: Reading metadata in parallel...");
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -52,48 +56,89 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
             .progress_chars("=>-"),
     );
 
-    for file in &files {
-        pb.inc(1);
+    struct FileInfo {
+        path: PathBuf,
+        metadata: AudioMetadata,
+        quality: u32,
+        dest_dir: PathBuf,
+        dest_path: PathBuf,
+        title_normalized: String,
+    }
+
+    let file_infos: Vec<FileInfo> = files
+        .par_iter()
+        .filter_map(|file| {
+            pb.inc(1);
+
+            // Extract metadata
+            let metadata = match AudioMetadata::from_file(file) {
+                Ok(m) => m,
+                Err(e) => {
+                    logger::error(&format!("Failed to read metadata from {}: {}", file.display(), e));
+                    return None;
+                }
+            };
+
+            let new_quality = quality::calculate_quality_score(&metadata, &options.config);
+
+            // Determine destination
+            let artist = metadata.get_organizing_artist(options.config.naming.prefer_artist);
+            let album = metadata.get_album();
+            let title = metadata.get_title();
+
+            let artist_safe = utils::clamp_component(
+                &utils::sanitize(&artist),
+                options.config.naming.max_name_length,
+            );
+            let album_safe = utils::clamp_component(
+                &utils::sanitize(&album),
+                options.config.naming.max_name_length,
+            );
+
+            let dest_dir = options.output_dir.join(&artist_safe).join(&album_safe);
+            let filename = file.file_name().unwrap();
+            let dest_path = dest_dir.join(filename);
+            let title_normalized = utils::normalize_for_comparison(&title);
+
+            Some(FileInfo {
+                path: file.clone(),
+                metadata,
+                quality: new_quality,
+                dest_dir,
+                dest_path,
+                title_normalized,
+            })
+        })
+        .collect();
+
+    pb.finish_and_clear();
+
+    logger::info(&format!("Metadata extracted from {} files", file_infos.len()));
+
+    // Phase 2: Sequential file operations (to avoid race conditions)
+    logger::info("Phase 2/2: Organizing files...");
+    let pb2 = ProgressBar::new(file_infos.len() as u64);
+    pb2.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta})")
+            .unwrap()
+            .progress_chars("=>-"),
+    );
+
+    for file_info in &file_infos {
+        pb2.inc(1);
         stats.processed += 1;
 
-        pb.set_message(format!("Processing: {}", file.file_name().unwrap().to_string_lossy()));
-
-        // Extract metadata
-        let metadata = match AudioMetadata::from_file(file) {
-            Ok(m) => m,
-            Err(e) => {
-                logger::error(&format!("Failed to read metadata from {}: {}", file.display(), e));
-                stats.errors += 1;
-                continue;
-            }
-        };
-
-        let new_quality = quality::calculate_quality_score(&metadata, &options.config);
-
-        // Determine destination
-        let artist = metadata.get_organizing_artist(options.config.naming.prefer_artist);
-        let album = metadata.get_album();
-        let title = metadata.get_title();
-
-        let artist_safe = utils::clamp_component(
-            &utils::sanitize(&artist),
-            options.config.naming.max_name_length,
-        );
-        let album_safe = utils::clamp_component(
-            &utils::sanitize(&album),
-            options.config.naming.max_name_length,
-        );
-
-        let dest_dir = options.output_dir.join(&artist_safe).join(&album_safe);
-        let filename = file.file_name().unwrap();
-        let dest_path = dest_dir.join(filename);
+        let new_quality = file_info.quality;
+        let dest_dir = &file_info.dest_dir;
+        let dest_path = &file_info.dest_path;
+        let title_normalized = &file_info.title_normalized;
 
         // Check for existing file with same title
-        let title_normalized = utils::normalize_for_comparison(&title);
         let mut existing_match: Option<(PathBuf, u32)> = None;
 
         if dest_dir.exists() {
-            for entry in WalkDir::new(&dest_dir)
+            for entry in WalkDir::new(dest_dir)
                 .max_depth(1)
                 .into_iter()
                 .filter_map(|e| e.ok())
@@ -103,7 +148,7 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
                     let existing_title = existing_meta.get_title();
                     let existing_normalized = utils::normalize_for_comparison(&existing_title);
 
-                    if title_normalized == existing_normalized {
+                    if *title_normalized == existing_normalized {
                         let existing_quality = quality::calculate_quality_score(&existing_meta, &options.config);
                         existing_match = Some((entry.path().to_path_buf(), existing_quality));
                         break;
@@ -117,21 +162,21 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
                 Some(("replace", existing_path, new_quality, existing_quality))
             } else if new_quality == existing_quality {
                 logger::debug(
-                    &format!("Skipping (same quality {}): {}", new_quality, file.display()),
+                    &format!("Skipping (same quality {}): {}", new_quality, file_info.path.display()),
                     options.verbose,
                 );
-                stats.add_skipped(file.clone(), format!("same quality ({})", new_quality));
+                stats.add_skipped(file_info.path.clone(), format!("same quality ({})", new_quality));
                 continue;
             } else {
                 logger::debug(
-                    &format!("Skipping (lower quality {} < {}): {}", new_quality, existing_quality, file.display()),
+                    &format!("Skipping (lower quality {} < {}): {}", new_quality, existing_quality, file_info.path.display()),
                     options.verbose,
                 );
-                stats.add_skipped(file.clone(), format!("lower quality ({} < {})", new_quality, existing_quality));
+                stats.add_skipped(file_info.path.clone(), format!("lower quality ({} < {})", new_quality, existing_quality));
                 continue;
             }
         } else {
-            Some(("copy", dest_path, new_quality, 0))
+            Some(("copy", dest_path.clone(), new_quality, 0))
         };
 
         if let Some((action_type, target_path, new_q, old_q)) = action {
@@ -158,11 +203,11 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
 
                 // Perform action
                 let result = if action_type == "replace" {
-                    fs::copy(file, &target_path).map(|_| ())
+                    fs::copy(&file_info.path, &target_path).map(|_| ())
                 } else if options.do_move {
-                    fs::rename(file, &target_path)
+                    fs::rename(&file_info.path, &target_path)
                 } else {
-                    fs::copy(file, &target_path).map(|_| ())
+                    fs::copy(&file_info.path, &target_path).map(|_| ())
                 };
 
                 match result {
@@ -182,7 +227,7 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
                         stats.succeeded += 1;
                     }
                     Err(e) => {
-                        logger::error(&format!("Failed to process {}: {}", file.display(), e));
+                        logger::error(&format!("Failed to process {}: {}", file_info.path.display(), e));
                         stats.errors += 1;
                     }
                 }
@@ -190,7 +235,7 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
         }
     }
 
-    pb.finish_and_clear();
+    pb2.finish_and_clear();
 
     logger::success(&format!("Upgraded {} files with better quality", replaced_count));
     stats.print_summary("Quality-Aware Sort");

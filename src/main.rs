@@ -31,7 +31,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Convert audio files to OPUS format
+    /// Convert audio files to specified format
     Convert {
         /// Input directory to scan
         #[arg(short, long)]
@@ -40,6 +40,10 @@ enum Commands {
         /// Output directory for converted files
         #[arg(short, long)]
         output: PathBuf,
+
+        /// Output format (opus, aac, mp3, vorbis)
+        #[arg(short, long)]
+        format: Option<String>,
 
         /// Delete original files after successful conversion
         #[arg(long)]
@@ -83,18 +87,11 @@ enum Commands {
         input: PathBuf,
     },
 
-    /// Convert all names to lowercase
-    Lowercase {
-        /// Directory to process
-        #[arg(short, long)]
-        input: PathBuf,
-    },
-
     /// Find and remove duplicate files based on metadata
     Dedupe {
-        /// Directory to scan
+        /// Input directory to scan
         #[arg(short, long)]
-        dir: PathBuf,
+        input: PathBuf,
 
         /// Automatically remove duplicates without confirmation
         #[arg(long)]
@@ -111,19 +108,19 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Convert to OPUS after sorting (optional)
-        #[arg(long)]
-        convert_opus: bool,
+        /// Convert to specified format after sorting (opus, aac, mp3, vorbis)
+        #[arg(short, long)]
+        format: Option<String>,
 
-        /// Delete original files after conversion (requires --convert-opus)
+        /// Delete original files after conversion (requires --format)
         #[arg(long)]
         destructive: bool,
 
-        /// Always convert regardless of quality (requires --convert-opus)
+        /// Always convert regardless of quality (requires --format)
         #[arg(long)]
         always_convert: bool,
 
-        /// Convert higher quality down to OPUS (e.g., FLAC to OPUS to save space, requires --convert-opus)
+        /// Convert higher quality down (e.g., FLAC to lossy to save space, requires --format)
         #[arg(long)]
         convert_down: bool,
     },
@@ -155,11 +152,13 @@ fn main() -> Result<()> {
         Commands::Convert {
             input,
             output,
+            format,
             delete_original,
         } => {
             let opts = convert::ConvertOptions {
                 input_dir: input,
                 output_dir: output,
+                output_format: format,
                 delete_original,
                 always_convert: config.convert.always_convert,
                 convert_down: config.convert.convert_down,
@@ -211,18 +210,9 @@ fn main() -> Result<()> {
             fix_naming::run(opts).map(|_| ())
         }
 
-        Commands::Lowercase { input } => {
-            let opts = lowercase::LowercaseOptions {
-                input_dir: input,
-                dry_run: cli.dry_run,
-                verbose: cli.verbose,
-            };
-            lowercase::run(opts).map(|_| ())
-        }
-
-        Commands::Dedupe { dir, auto_remove } => {
+        Commands::Dedupe { input, auto_remove } => {
             let opts = dedupe::DedupeOptions {
-                input_dir: dir,
+                input_dir: input,
                 dry_run: cli.dry_run,
                 verbose: cli.verbose,
                 auto_remove,
@@ -234,7 +224,7 @@ fn main() -> Result<()> {
         Commands::Unified {
             input,
             output,
-            convert_opus,
+            format,
             destructive,
             always_convert,
             convert_down,
@@ -242,7 +232,7 @@ fn main() -> Result<()> {
             let opts = unified::UnifiedOptions {
                 input_dir: input,
                 output_dir: output,
-                convert_opus,
+                output_format: format,
                 destructive,
                 always_convert,
                 convert_down,

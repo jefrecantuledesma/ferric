@@ -22,10 +22,17 @@ pub fn sanitize(s: &str) -> String {
     // Trim whitespace
     result = result.trim().to_string();
 
-    // Collapse multiple spaces
-    while result.contains("  ") {
-        result = result.replace("  ", " ");
-    }
+    // Collapse multiple spaces (single pass - O(n) instead of O(n²))
+    let mut prev_was_space = false;
+    result = result
+        .chars()
+        .filter(|&c| {
+            let is_space = c == ' ';
+            let keep = !(is_space && prev_was_space);
+            prev_was_space = is_space;
+            keep
+        })
+        .collect();
 
     // Return default if empty
     if result.is_empty() {
@@ -124,10 +131,17 @@ pub fn normalize_name(name: &str) -> String {
     // Convert to lowercase
     result = result.to_lowercase();
 
-    // Normalize whitespace: replace multiple spaces with single space
-    while result.contains("  ") {
-        result = result.replace("  ", " ");
-    }
+    // Normalize whitespace: replace multiple spaces with single space (O(n) single pass)
+    let mut prev_was_space = false;
+    result = result
+        .chars()
+        .filter(|&c| {
+            let is_space = c == ' ';
+            let keep = !(is_space && prev_was_space);
+            prev_was_space = is_space;
+            keep
+        })
+        .collect();
 
     // Trim leading and trailing whitespace
     result.trim().to_string()
