@@ -17,7 +17,9 @@ pub struct FixNamingOptions {
 pub fn run(options: FixNamingOptions) -> Result<OperationStats> {
     logger::stage("Starting name normalization");
     logger::info(&format!("Input directory: {}", options.input_dir.display()));
-    logger::info("Fixes: curly apostrophes -> straight, uppercase -> lowercase, whitespace normalization");
+    logger::info(
+        "Fixes: curly apostrophes -> straight, uppercase -> lowercase, whitespace normalization",
+    );
 
     if options.dry_run {
         logger::warning("DRY RUN MODE - No changes will be made");
@@ -70,7 +72,10 @@ fn fix_files(root: &Path, stats: &mut OperationStats, options: &FixNamingOptions
                         "Conflict: {} already exists, skipping",
                         new_path.display()
                     ));
-                    stats.add_skipped(file.clone(), "naming conflict - target already exists".to_string());
+                    stats.add_skipped(
+                        file.clone(),
+                        "naming conflict - target already exists".to_string(),
+                    );
                     continue;
                 }
 
@@ -103,7 +108,11 @@ fn fix_files(root: &Path, stats: &mut OperationStats, options: &FixNamingOptions
     Ok(())
 }
 
-fn fix_directories(root: &Path, stats: &mut OperationStats, options: &FixNamingOptions) -> Result<()> {
+fn fix_directories(
+    root: &Path,
+    stats: &mut OperationStats,
+    options: &FixNamingOptions,
+) -> Result<()> {
     let mut dirs: Vec<PathBuf> = WalkDir::new(root)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -144,7 +153,10 @@ fn fix_directories(root: &Path, stats: &mut OperationStats, options: &FixNamingO
                         "Conflict: {} already exists, skipping",
                         new_path.display()
                     ));
-                    stats.add_skipped(dir.clone(), "naming conflict - target directory already exists".to_string());
+                    stats.add_skipped(
+                        dir.clone(),
+                        "naming conflict - target directory already exists".to_string(),
+                    );
                     continue;
                 }
 

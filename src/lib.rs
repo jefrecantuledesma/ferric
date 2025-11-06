@@ -2,9 +2,9 @@
 pub mod config;
 pub mod logger;
 pub mod metadata;
+pub mod operations;
 pub mod quality;
 pub mod utils;
-pub mod operations;
 
 // Re-export commonly used types
 pub use anyhow::{Context, Result};

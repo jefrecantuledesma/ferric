@@ -22,8 +22,14 @@ pub struct TagSortOptions {
 pub fn run(options: TagSortOptions) -> Result<OperationStats> {
     logger::stage("Starting tag-based sort");
     logger::info(&format!("Input directory: {}", options.input_dir.display()));
-    logger::info(&format!("Output directory: {}", options.output_dir.display()));
-    logger::info(&format!("Mode: {}", if options.do_move { "MOVE" } else { "COPY" }));
+    logger::info(&format!(
+        "Output directory: {}",
+        options.output_dir.display()
+    ));
+    logger::info(&format!(
+        "Mode: {}",
+        if options.do_move { "MOVE" } else { "COPY" }
+    ));
 
     if options.dry_run {
         logger::warning("DRY RUN MODE - No files will be modified");
@@ -54,13 +60,20 @@ pub fn run(options: TagSortOptions) -> Result<OperationStats> {
         pb.inc(1);
         stats.processed += 1;
 
-        pb.set_message(format!("Processing: {}", file.file_name().unwrap().to_string_lossy()));
+        pb.set_message(format!(
+            "Processing: {}",
+            file.file_name().unwrap().to_string_lossy()
+        ));
 
         // Extract metadata
         let metadata = match AudioMetadata::from_file(file) {
             Ok(m) => m,
             Err(e) => {
-                logger::error(&format!("Failed to read metadata from {}: {}", file.display(), e));
+                logger::error(&format!(
+                    "Failed to read metadata from {}: {}",
+                    file.display(),
+                    e
+                ));
                 stats.errors += 1;
                 continue;
             }
@@ -94,14 +107,22 @@ pub fn run(options: TagSortOptions) -> Result<OperationStats> {
 
         if options.dry_run {
             logger::debug(
-                &format!("Would {} to: {}", if options.do_move { "move" } else { "copy" }, final_dest.display()),
+                &format!(
+                    "Would {} to: {}",
+                    if options.do_move { "move" } else { "copy" },
+                    final_dest.display()
+                ),
                 options.verbose,
             );
             stats.succeeded += 1;
         } else {
             // Create destination directory
             if let Err(e) = fs::create_dir_all(&dest_dir) {
-                logger::error(&format!("Failed to create directory {}: {}", dest_dir.display(), e));
+                logger::error(&format!(
+                    "Failed to create directory {}: {}",
+                    dest_dir.display(),
+                    e
+                ));
                 stats.errors += 1;
                 continue;
             }
@@ -116,13 +137,22 @@ pub fn run(options: TagSortOptions) -> Result<OperationStats> {
             match result {
                 Ok(_) => {
                     logger::debug(
-                        &format!("{} to: {}", if options.do_move { "Moved" } else { "Copied" }, final_dest.display()),
+                        &format!(
+                            "{} to: {}",
+                            if options.do_move { "Moved" } else { "Copied" },
+                            final_dest.display()
+                        ),
                         options.verbose,
                     );
                     stats.succeeded += 1;
                 }
                 Err(e) => {
-                    logger::error(&format!("Failed to {} {}: {}", if options.do_move { "move" } else { "copy" }, file.display(), e));
+                    logger::error(&format!(
+                        "Failed to {} {}: {}",
+                        if options.do_move { "move" } else { "copy" },
+                        file.display(),
+                        e
+                    ));
                     stats.errors += 1;
                 }
             }

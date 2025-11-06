@@ -14,10 +14,7 @@ pub fn sanitize(s: &str) -> String {
     result = result.replace('/', "–").replace('\\', "-");
 
     // Remove control characters (0x00-0x1F)
-    result = result
-        .chars()
-        .filter(|c| *c as u32 >= 0x20)
-        .collect();
+    result = result.chars().filter(|c| *c as u32 >= 0x20).collect();
 
     // Trim whitespace
     result = result.trim().to_string();
@@ -107,7 +104,17 @@ pub fn is_audio_file(path: &Path) -> bool {
         let ext_lower = ext.to_string_lossy().to_lowercase();
         matches!(
             ext_lower.as_str(),
-            "flac" | "opus" | "ogg" | "mp3" | "m4a" | "aac" | "wav" | "aiff" | "aif" | "wma" | "alac"
+            "flac"
+                | "opus"
+                | "ogg"
+                | "mp3"
+                | "m4a"
+                | "aac"
+                | "wav"
+                | "aiff"
+                | "aif"
+                | "wma"
+                | "alac"
         )
     } else {
         false
@@ -165,10 +172,7 @@ mod tests {
             normalize_for_comparison("The Beatles - Let It Be"),
             "the beatles let it be"
         );
-        assert_eq!(
-            normalize_for_comparison("Can't Stop!!!"),
-            "can t stop"
-        );
+        assert_eq!(normalize_for_comparison("Can't Stop!!!"), "can t stop");
     }
 
     #[test]

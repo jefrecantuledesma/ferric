@@ -25,7 +25,10 @@ pub struct SortOptions {
 pub fn run(options: SortOptions) -> Result<OperationStats> {
     logger::stage("Starting intelligent quality-aware sort");
     logger::info(&format!("Input directory: {}", options.input_dir.display()));
-    logger::info(&format!("Output directory: {}", options.output_dir.display()));
+    logger::info(&format!(
+        "Output directory: {}",
+        options.output_dir.display()
+    ));
     logger::info("Will only replace files with higher quality versions");
 
     if options.dry_run {
@@ -74,7 +77,11 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
             let metadata = match AudioMetadata::from_file(file) {
                 Ok(m) => m,
                 Err(e) => {
-                    logger::error(&format!("Failed to read metadata from {}: {}", file.display(), e));
+                    logger::error(&format!(
+                        "Failed to read metadata from {}: {}",
+                        file.display(),
+                        e
+                    ));
                     return None;
                 }
             };
@@ -113,7 +120,10 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
 
     pb.finish_and_clear();
 
-    logger::info(&format!("Metadata extracted from {} files", file_infos.len()));
+    logger::info(&format!(
+        "Metadata extracted from {} files",
+        file_infos.len()
+    ));
 
     // Phase 2: Sequential file operations (to avoid race conditions)
     logger::info("Phase 2/2: Organizing files...");
@@ -149,7 +159,8 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
                     let existing_normalized = utils::normalize_for_comparison(&existing_title);
 
                     if *title_normalized == existing_normalized {
-                        let existing_quality = quality::calculate_quality_score(&existing_meta, &options.config);
+                        let existing_quality =
+                            quality::calculate_quality_score(&existing_meta, &options.config);
                         existing_match = Some((entry.path().to_path_buf(), existing_quality));
                         break;
                     }
@@ -162,17 +173,32 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
                 Some(("replace", existing_path, new_quality, existing_quality))
             } else if new_quality == existing_quality {
                 logger::debug(
-                    &format!("Skipping (same quality {}): {}", new_quality, file_info.path.display()),
+                    &format!(
+                        "Skipping (same quality {}): {}",
+                        new_quality,
+                        file_info.path.display()
+                    ),
                     options.verbose,
                 );
-                stats.add_skipped(file_info.path.clone(), format!("same quality ({})", new_quality));
+                stats.add_skipped(
+                    file_info.path.clone(),
+                    format!("same quality ({})", new_quality),
+                );
                 continue;
             } else {
                 logger::debug(
-                    &format!("Skipping (lower quality {} < {}): {}", new_quality, existing_quality, file_info.path.display()),
+                    &format!(
+                        "Skipping (lower quality {} < {}): {}",
+                        new_quality,
+                        existing_quality,
+                        file_info.path.display()
+                    ),
                     options.verbose,
                 );
-                stats.add_skipped(file_info.path.clone(), format!("lower quality ({} < {})", new_quality, existing_quality));
+                stats.add_skipped(
+                    file_info.path.clone(),
+                    format!("lower quality ({} < {})", new_quality, existing_quality),
+                );
                 continue;
             }
         } else {
@@ -183,7 +209,12 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
             if options.dry_run {
                 if action_type == "replace" {
                     logger::debug(
-                        &format!("Would replace (quality {} > {}): {}", new_q, old_q, target_path.display()),
+                        &format!(
+                            "Would replace (quality {} > {}): {}",
+                            new_q,
+                            old_q,
+                            target_path.display()
+                        ),
                         options.verbose,
                     );
                 } else {
@@ -196,7 +227,11 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
             } else {
                 // Create destination directory
                 if let Err(e) = fs::create_dir_all(&dest_dir) {
-                    logger::error(&format!("Failed to create directory {}: {}", dest_dir.display(), e));
+                    logger::error(&format!(
+                        "Failed to create directory {}: {}",
+                        dest_dir.display(),
+                        e
+                    ));
                     stats.errors += 1;
                     continue;
                 }
@@ -214,7 +249,12 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
                     Ok(_) => {
                         if action_type == "replace" {
                             logger::debug(
-                                &format!("Replaced (quality {} > {}): {}", new_q, old_q, target_path.display()),
+                                &format!(
+                                    "Replaced (quality {} > {}): {}",
+                                    new_q,
+                                    old_q,
+                                    target_path.display()
+                                ),
                                 options.verbose,
                             );
                             replaced_count += 1;
@@ -227,7 +267,11 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
                         stats.succeeded += 1;
                     }
                     Err(e) => {
-                        logger::error(&format!("Failed to process {}: {}", file_info.path.display(), e));
+                        logger::error(&format!(
+                            "Failed to process {}: {}",
+                            file_info.path.display(),
+                            e
+                        ));
                         stats.errors += 1;
                     }
                 }
@@ -237,7 +281,10 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
 
     pb2.finish_and_clear();
 
-    logger::success(&format!("Upgraded {} files with better quality", replaced_count));
+    logger::success(&format!(
+        "Upgraded {} files with better quality",
+        replaced_count
+    ));
     stats.print_summary("Quality-Aware Sort");
     Ok(stats)
 }

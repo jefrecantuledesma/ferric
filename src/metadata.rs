@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
+use std::fs::File;
 use std::path::Path;
 use std::process::Command;
-use std::fs::File;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
@@ -17,7 +17,7 @@ pub struct AudioMetadata {
     pub date: Option<String>,
     pub genre: Option<String>,
     pub codec: String,
-    pub bitrate: Option<u32>,  // in bits per second
+    pub bitrate: Option<u32>, // in bits per second
     pub sample_rate: Option<u32>,
     pub channels: Option<u8>,
     pub duration_secs: Option<f64>,
@@ -34,8 +34,10 @@ impl AudioMetadata {
     fn from_file_ffprobe(path: &Path) -> Result<Self> {
         let output = Command::new("ffprobe")
             .args(&[
-                "-v", "quiet",
-                "-print_format", "json",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
                 "-show_format",
                 "-show_streams",
             ])
@@ -48,8 +50,8 @@ impl AudioMetadata {
         }
 
         let json_str = String::from_utf8_lossy(&output.stdout);
-        let json: serde_json::Value = serde_json::from_str(&json_str)
-            .context("Failed to parse ffprobe JSON output")?;
+        let json: serde_json::Value =
+            serde_json::from_str(&json_str).context("Failed to parse ffprobe JSON output")?;
 
         let mut metadata = AudioMetadata::default();
 
@@ -57,7 +59,8 @@ impl AudioMetadata {
         if let Some(streams) = json.get("streams").and_then(|s| s.as_array()) {
             for stream in streams {
                 if stream.get("codec_type").and_then(|v| v.as_str()) == Some("audio") {
-                    metadata.codec = stream.get("codec_name")
+                    metadata.codec = stream
+                        .get("codec_name")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown")
                         .to_string();
@@ -72,37 +75,45 @@ impl AudioMetadata {
 
                     // Extract tags from stream (OPUS/OGG files store tags here)
                     if let Some(tags) = stream.get("tags").and_then(|t| t.as_object()) {
-                        metadata.artist = tags.get("artist")
+                        metadata.artist = tags
+                            .get("artist")
                             .or_else(|| tags.get("ARTIST"))
                             .and_then(|v| v.as_str())
                             .map(String::from);
-                        metadata.album = tags.get("album")
+                        metadata.album = tags
+                            .get("album")
                             .or_else(|| tags.get("ALBUM"))
                             .and_then(|v| v.as_str())
                             .map(String::from);
-                        metadata.album_artist = tags.get("album_artist")
+                        metadata.album_artist = tags
+                            .get("album_artist")
                             .or_else(|| tags.get("ALBUM_ARTIST"))
                             .or_else(|| tags.get("albumartist"))
                             .and_then(|v| v.as_str())
                             .map(String::from);
-                        metadata.title = tags.get("title")
+                        metadata.title = tags
+                            .get("title")
                             .or_else(|| tags.get("TITLE"))
                             .and_then(|v| v.as_str())
                             .map(String::from);
-                        metadata.date = tags.get("date")
+                        metadata.date = tags
+                            .get("date")
                             .or_else(|| tags.get("DATE"))
                             .or_else(|| tags.get("year"))
                             .or_else(|| tags.get("YEAR"))
                             .and_then(|v| v.as_str())
                             .map(String::from);
-                        metadata.genre = tags.get("genre")
+                        metadata.genre = tags
+                            .get("genre")
                             .or_else(|| tags.get("GENRE"))
                             .and_then(|v| v.as_str())
                             .map(String::from);
 
-                        if let Some(track_str) = tags.get("track")
+                        if let Some(track_str) = tags
+                            .get("track")
                             .or_else(|| tags.get("TRACK"))
-                            .and_then(|v| v.as_str()) {
+                            .and_then(|v| v.as_str())
+                        {
                             if let Some(num_str) = track_str.split('/').next() {
                                 metadata.track_number = num_str.parse().ok();
                             }
@@ -119,13 +130,17 @@ impl AudioMetadata {
             if let Some(tags) = format.get("tags").and_then(|t| t.as_object()) {
                 // Only set if not already set from stream tags
                 if metadata.artist.is_none() {
-                    metadata.artist = tags.get("artist").and_then(|v| v.as_str()).map(String::from);
+                    metadata.artist = tags
+                        .get("artist")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
                 }
                 if metadata.album.is_none() {
                     metadata.album = tags.get("album").and_then(|v| v.as_str()).map(String::from);
                 }
                 if metadata.album_artist.is_none() {
-                    metadata.album_artist = tags.get("album_artist")
+                    metadata.album_artist = tags
+                        .get("album_artist")
                         .or_else(|| tags.get("ALBUM_ARTIST"))
                         .or_else(|| tags.get("albumartist"))
                         .and_then(|v| v.as_str())
@@ -135,7 +150,8 @@ impl AudioMetadata {
                     metadata.title = tags.get("title").and_then(|v| v.as_str()).map(String::from);
                 }
                 if metadata.date.is_none() {
-                    metadata.date = tags.get("date")
+                    metadata.date = tags
+                        .get("date")
                         .or_else(|| tags.get("year"))
                         .and_then(|v| v.as_str())
                         .map(String::from);
@@ -187,7 +203,12 @@ impl AudioMetadata {
 
         // Probe the media source
         let mut probed = symphonia::default::get_probe()
-            .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+            .format(
+                &hint,
+                mss,
+                &FormatOptions::default(),
+                &MetadataOptions::default(),
+            )
             .with_context(|| format!("Failed to probe audio file: {}", path.display()))?;
 
         let mut metadata = AudioMetadata::default();
@@ -208,9 +229,8 @@ impl AudioMetadata {
                 }
             } else if let Some(time_base) = track.codec_params.time_base {
                 if let Some(n_frames) = track.codec_params.n_frames {
-                    metadata.duration_secs = Some(
-                        n_frames as f64 * time_base.numer as f64 / time_base.denom as f64,
-                    );
+                    metadata.duration_secs =
+                        Some(n_frames as f64 * time_base.numer as f64 / time_base.denom as f64);
                 }
             }
         }

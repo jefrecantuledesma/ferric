@@ -30,7 +30,10 @@ struct TrackSignature {
 /// Find and remove duplicate audio files based on metadata
 pub fn run(options: DedupeOptions) -> Result<OperationStats> {
     logger::stage("Starting metadata-based deduplication");
-    logger::info(&format!("Scanning directory: {}", options.input_dir.display()));
+    logger::info(&format!(
+        "Scanning directory: {}",
+        options.input_dir.display()
+    ));
     logger::info("Comparing: artist, album, and title metadata");
 
     if options.dry_run {
@@ -73,12 +76,18 @@ pub fn run(options: DedupeOptions) -> Result<OperationStats> {
                 let quality_score = quality::calculate_quality_score(&metadata, &options.config);
 
                 let mut map = signature_map.lock().unwrap();
-                map.entry(signature)
-                    .or_insert_with(Vec::new)
-                    .push((file.clone(), metadata, quality_score));
+                map.entry(signature).or_insert_with(Vec::new).push((
+                    file.clone(),
+                    metadata,
+                    quality_score,
+                ));
             }
             Err(e) => {
-                logger::error(&format!("Failed to read metadata from {}: {}", file.display(), e));
+                logger::error(&format!(
+                    "Failed to read metadata from {}: {}",
+                    file.display(),
+                    e
+                ));
                 let mut stats = stats_mutex.lock().unwrap();
                 stats.errors += 1;
             }
@@ -87,7 +96,10 @@ pub fn run(options: DedupeOptions) -> Result<OperationStats> {
 
     // Extract stats and map from Arc<Mutex<>>
     let mut stats = Arc::try_unwrap(stats_mutex).unwrap().into_inner().unwrap();
-    let signature_map = Arc::try_unwrap(signature_map).unwrap().into_inner().unwrap();
+    let signature_map = Arc::try_unwrap(signature_map)
+        .unwrap()
+        .into_inner()
+        .unwrap();
 
     // Find duplicates
     let mut duplicate_groups = 0;
@@ -132,7 +144,10 @@ pub fn run(options: DedupeOptions) -> Result<OperationStats> {
     }
 
     logger::info(&format!("\nFound {} duplicate groups", duplicate_groups));
-    logger::info(&format!("Files marked for removal: {}", files_to_remove.len()));
+    logger::info(&format!(
+        "Files marked for removal: {}",
+        files_to_remove.len()
+    ));
 
     if !files_to_remove.is_empty() && !options.auto_remove && !options.dry_run {
         logger::warning("\nProceed with deletion? [y/N]: ");
@@ -147,7 +162,10 @@ pub fn run(options: DedupeOptions) -> Result<OperationStats> {
     // Remove files
     for file in files_to_remove {
         if options.dry_run {
-            logger::debug(&format!("Would delete: {}", file.display()), options.verbose);
+            logger::debug(
+                &format!("Would delete: {}", file.display()),
+                options.verbose,
+            );
             stats.succeeded += 1;
         } else {
             match fs::remove_file(&file) {

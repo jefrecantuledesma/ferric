@@ -23,7 +23,10 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
     logger::stage("============================================================");
 
     logger::info(&format!("Input directory: {}", options.input_dir.display()));
-    logger::info(&format!("Output directory: {}", options.output_dir.display()));
+    logger::info(&format!(
+        "Output directory: {}",
+        options.output_dir.display()
+    ));
 
     let should_convert = options.output_format.is_some();
     if should_convert {
@@ -50,7 +53,10 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
             if options.destructive {
                 logger::warning(&format!("  3. DELETE original non-{} files", format));
             }
-            logger::info(&format!("  {}. Normalize all naming", if options.destructive { "4" } else { "3" }));
+            logger::info(&format!(
+                "  {}. Normalize all naming",
+                if options.destructive { "4" } else { "3" }
+            ));
         } else {
             logger::info("  2. Normalize all naming");
         }
@@ -96,7 +102,10 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
     let mut current_step = 2;
     if should_convert {
         let format = options.output_format.as_ref().unwrap().to_uppercase();
-        logger::stage(&format!("\n[{}/{}] Converting to {}...", current_step, total_steps, format));
+        logger::stage(&format!(
+            "\n[{}/{}] Converting to {}...",
+            current_step, total_steps, format
+        ));
         let convert_opts = convert::ConvertOptions {
             input_dir: options.output_dir.clone(),
             output_dir: options.output_dir.clone(),
@@ -126,7 +135,10 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
     }
 
     // Step 3: Fix naming
-    logger::stage(&format!("\n[{}/{}] Normalizing names...", current_step, total_steps));
+    logger::stage(&format!(
+        "\n[{}/{}] Normalizing names...",
+        current_step, total_steps
+    ));
     let naming_opts = fix_naming::FixNamingOptions {
         input_dir: options.output_dir.clone(),
         dry_run: options.dry_run,

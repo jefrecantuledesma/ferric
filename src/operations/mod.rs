@@ -1,6 +1,7 @@
 pub mod convert;
 pub mod dedupe;
 pub mod fix_naming;
+pub mod playlist;
 pub mod sort;
 pub mod tag_sort;
 pub mod unified;

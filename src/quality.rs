@@ -79,7 +79,8 @@ pub fn get_audio_format(codec: &str) -> AudioFormat {
         || codec_lower.contains("aiff")
         || codec_lower.contains("pcm")
         || codec_lower.contains("tta")
-        || codec_lower.contains("wv") // WavPack
+        || codec_lower.contains("wv")
+    // WavPack
     {
         return AudioFormat::Lossless;
     }
@@ -158,7 +159,11 @@ pub enum QualityComparison {
     Equal,
 }
 
-pub fn compare_quality(meta1: &AudioMetadata, meta2: &AudioMetadata, config: &Config) -> QualityComparison {
+pub fn compare_quality(
+    meta1: &AudioMetadata,
+    meta2: &AudioMetadata,
+    config: &Config,
+) -> QualityComparison {
     let score1 = calculate_quality_score(meta1, config);
     let score2 = calculate_quality_score(meta2, config);
 

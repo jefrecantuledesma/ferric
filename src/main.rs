@@ -131,6 +131,21 @@ enum Commands {
         #[arg(short, long, default_value = "ferric.toml")]
         output: PathBuf,
     },
+
+    /// Build an .m3u playlist from an Exportify CSV and local library
+    PlaylistImport {
+        /// Path to Exportify CSV file
+        #[arg(short, long)]
+        playlist: PathBuf,
+
+        /// Library root to search for audio files
+        #[arg(short, long)]
+        library: PathBuf,
+
+        /// Optional output path for generated .m3u (defaults to playlist path with .m3u)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -246,8 +261,26 @@ fn main() -> Result<()> {
         Commands::GenConfig { output } => {
             let example = Config::generate_example();
             std::fs::write(&output, example)?;
-            ferric::logger::success(&format!("Generated example config at: {}", output.display()));
+            ferric::logger::success(&format!(
+                "Generated example config at: {}",
+                output.display()
+            ));
             Ok(())
+        }
+
+        Commands::PlaylistImport {
+            playlist,
+            library,
+            output,
+        } => {
+            let opts = playlist::PlaylistImportOptions {
+                playlist_csv: playlist,
+                library_dir: library,
+                output_path: output,
+                dry_run: cli.dry_run,
+                verbose: cli.verbose,
+            };
+            playlist::run(opts)
         }
     };
 
