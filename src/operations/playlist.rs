@@ -3,10 +3,13 @@ use crate::metadata::AudioMetadata;
 use crate::utils;
 use anyhow::{anyhow, Context, Result};
 use csv::ReaderBuilder;
-use std::collections::HashSet;
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use strsim::jaro_winkler;
 use walkdir::WalkDir;
 
@@ -51,11 +54,19 @@ pub fn run(options: PlaylistImportOptions) -> Result<()> {
 
     let library_tracks = build_library_index(&options.library_dir, options.verbose)?;
 
+    // Build HashMap for fast exact match lookups
+    logger::info("Building exact match index...");
+    let exact_match_index = build_exact_match_index(&library_tracks);
+    logger::success(&format!(
+        "Built exact match index with {} entries",
+        exact_match_index.len()
+    ));
+
     let mut matched_paths = Vec::with_capacity(entries.len());
     let mut missing = Vec::new();
 
     for entry in &entries {
-        let candidates = find_matches(&entry, &library_tracks, options.verbose);
+        let candidates = find_matches(&entry, &library_tracks, &exact_match_index, options.verbose);
 
         if candidates.is_empty() {
             missing.push(format!("{} - {}", entry.artist_raw, entry.title_raw));
@@ -207,88 +218,194 @@ fn strip_bom(value: &str) -> &str {
     value.strip_prefix('\u{feff}').unwrap_or(value)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LibraryTrack {
     path: PathBuf,
     artist_variants: Vec<String>,
     title_variants: Vec<String>,
 }
 
-fn build_library_index(
-    library_dir: &Path,
-    verbose: bool,
-) -> Result<Vec<LibraryTrack>> {
-    logger::info("Indexing local audio library...");
-    let mut tracks = Vec::new();
+#[derive(Debug, Serialize, Deserialize)]
+struct LibraryCache {
+    version: u32,
+    library_path: PathBuf,
+    track_count: usize,
+    last_modified: std::time::SystemTime,
+    tracks: Vec<LibraryTrack>,
+}
+
+const CACHE_VERSION: u32 = 1;
+
+fn get_cache_path(library_dir: &Path) -> Result<PathBuf> {
+    // Use a hash of the library path to create a unique cache filename
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    library_dir.canonicalize()?.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    let cache_dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".ferric")
+        .join("cache");
+
+    fs::create_dir_all(&cache_dir)?;
+    Ok(cache_dir.join(format!("library_{:x}.json", hash)))
+}
+
+fn get_library_mtime(library_dir: &Path) -> Result<std::time::SystemTime> {
+    // Get the most recent modification time in the library
+    let mut latest = std::time::SystemTime::UNIX_EPOCH;
 
     for entry in WalkDir::new(library_dir)
+        .max_depth(5) // Only check first few levels for performance
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
     {
-        let path = entry.into_path();
-        if !utils::is_audio_file(&path) {
-            continue;
-        }
-
-        match AudioMetadata::from_file(&path) {
-            Ok(metadata) => {
-                let track_artist = metadata.get_organizing_artist(true);
-                let album_artist = metadata.get_organizing_artist(false);
-
-                let mut artist_variants = expand_artist_keys(&track_artist);
-                if album_artist != track_artist {
-                    for variant in expand_artist_keys(&album_artist) {
-                        if !artist_variants.contains(&variant) {
-                            artist_variants.push(variant);
-                        }
-                    }
+        if let Ok(metadata) = entry.metadata() {
+            if let Ok(modified) = metadata.modified() {
+                if modified > latest {
+                    latest = modified;
                 }
-
-                if artist_variants.is_empty() {
-                    logger::debug(
-                        &format!("Skipping {} due to empty artist metadata", path.display()),
-                        verbose,
-                    );
-                    continue;
-                }
-
-                let title_variants = expand_title_variants(&metadata.get_title(), &artist_variants);
-                if title_variants.is_empty() {
-                    logger::debug(
-                        &format!("Skipping {} due to empty title metadata", path.display()),
-                        verbose,
-                    );
-                    continue;
-                }
-
-                logger::debug(
-                    &format!(
-                        "Indexed '{}' - '{}' ({})",
-                        artist_variants.first().unwrap_or(&"?".to_string()),
-                        title_variants.first().unwrap_or(&"?".to_string()),
-                        path.display()
-                    ),
-                    verbose,
-                );
-
-                tracks.push(LibraryTrack {
-                    path,
-                    artist_variants,
-                    title_variants,
-                });
-            }
-            Err(err) => {
-                logger::error(&format!(
-                    "Failed to read metadata from {}: {}",
-                    path.display(),
-                    err
-                ));
             }
         }
     }
 
+    Ok(latest)
+}
+
+fn load_cached_index(library_dir: &Path) -> Option<Vec<LibraryTrack>> {
+    let cache_path = get_cache_path(library_dir).ok()?;
+
+    if !cache_path.exists() {
+        return None;
+    }
+
+    let cache_data = fs::read_to_string(&cache_path).ok()?;
+    let cache: LibraryCache = serde_json::from_str(&cache_data).ok()?;
+
+    // Verify cache version
+    if cache.version != CACHE_VERSION {
+        logger::info("Cache version mismatch, rebuilding index...");
+        return None;
+    }
+
+    // Check if library has been modified
+    let current_mtime = get_library_mtime(library_dir).ok()?;
+    if current_mtime > cache.last_modified {
+        logger::info("Library modified since cache, rebuilding index...");
+        return None;
+    }
+
+    logger::success(&format!("Loaded {} tracks from cache", cache.tracks.len()));
+    Some(cache.tracks)
+}
+
+fn save_cache(library_dir: &Path, tracks: &[LibraryTrack]) -> Result<()> {
+    let cache_path = get_cache_path(library_dir)?;
+    let last_modified = get_library_mtime(library_dir)?;
+
+    let cache = LibraryCache {
+        version: CACHE_VERSION,
+        library_path: library_dir.to_path_buf(),
+        track_count: tracks.len(),
+        last_modified,
+        tracks: tracks.to_vec(),
+    };
+
+    let cache_json = serde_json::to_string(&cache)?;
+    fs::write(&cache_path, cache_json)?;
+
+    logger::info(&format!("Cached index to {}", cache_path.display()));
+    Ok(())
+}
+
+fn build_library_index(
+    library_dir: &Path,
+    verbose: bool,
+) -> Result<Vec<LibraryTrack>> {
+    // Try to load from cache first
+    if let Some(tracks) = load_cached_index(library_dir) {
+        return Ok(tracks);
+    }
+
+    logger::info("Indexing local audio library (parallel)...");
+
+    // Collect all audio file paths first
+    let audio_files: Vec<PathBuf> = WalkDir::new(library_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.into_path())
+        .filter(|path| utils::is_audio_file(path))
+        .collect();
+
+    logger::info(&format!("Found {} audio files, reading metadata...", audio_files.len()));
+
+    // Process files in parallel using rayon
+    let tracks: Vec<LibraryTrack> = audio_files
+        .par_iter()
+        .filter_map(|path| {
+            match AudioMetadata::from_file(path) {
+                Ok(metadata) => {
+                    let track_artist = metadata.get_organizing_artist(true);
+                    let album_artist = metadata.get_organizing_artist(false);
+
+                    let mut artist_variants = expand_artist_keys(&track_artist);
+                    if album_artist != track_artist {
+                        for variant in expand_artist_keys(&album_artist) {
+                            if !artist_variants.contains(&variant) {
+                                artist_variants.push(variant);
+                            }
+                        }
+                    }
+
+                    if artist_variants.is_empty() {
+                        if verbose {
+                            eprintln!("Skipping {} due to empty artist metadata", path.display());
+                        }
+                        return None;
+                    }
+
+                    let title_variants = expand_title_variants(&metadata.get_title(), &artist_variants);
+                    if title_variants.is_empty() {
+                        if verbose {
+                            eprintln!("Skipping {} due to empty title metadata", path.display());
+                        }
+                        return None;
+                    }
+
+                    if verbose {
+                        eprintln!(
+                            "Indexed '{}' - '{}' ({})",
+                            artist_variants.first().unwrap_or(&"?".to_string()),
+                            title_variants.first().unwrap_or(&"?".to_string()),
+                            path.display()
+                        );
+                    }
+
+                    Some(LibraryTrack {
+                        path: path.clone(),
+                        artist_variants,
+                        title_variants,
+                    })
+                }
+                Err(err) => {
+                    eprintln!("Failed to read metadata from {}: {}", path.display(), err);
+                    None
+                }
+            }
+        })
+        .collect();
+
     logger::success(&format!("Indexed {} tracks", tracks.len()));
+
+    // Save to cache for next time
+    if let Err(e) = save_cache(library_dir, &tracks) {
+        logger::warning(&format!("Failed to save cache: {}", e));
+    }
+
     Ok(tracks)
 }
 
@@ -480,9 +597,25 @@ fn remove_brackets(s: &str) -> String {
     result.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn build_exact_match_index(library: &[LibraryTrack]) -> HashMap<(String, String), Vec<usize>> {
+    let mut index: HashMap<(String, String), Vec<usize>> = HashMap::new();
+
+    for (track_idx, track) in library.iter().enumerate() {
+        for artist in &track.artist_variants {
+            for title in &track.title_variants {
+                let key = (artist.clone(), title.clone());
+                index.entry(key).or_insert_with(Vec::new).push(track_idx);
+            }
+        }
+    }
+
+    index
+}
+
 fn find_matches(
     entry: &PlaylistEntry,
     library: &[LibraryTrack],
+    exact_match_index: &HashMap<(String, String), Vec<usize>>,
     _verbose: bool,
 ) -> Vec<MatchCandidate> {
     let mut candidates: Vec<MatchCandidate> = Vec::new();
@@ -490,23 +623,41 @@ fn find_matches(
     const FUZZY_MATCH_THRESHOLD: f64 = 0.85;
     const MIN_SCORE_THRESHOLD: f64 = 0.75;
 
-    for track in library {
+    let mut exact_matched_indices = HashSet::new();
+
+    // FAST PATH: Try exact matches first using the HashMap index
+    for entry_artist in &entry.artist_keys {
+        for entry_title in &entry.title_keys {
+            let key = (entry_artist.clone(), entry_title.clone());
+            if let Some(track_indices) = exact_match_index.get(&key) {
+                for &track_idx in track_indices {
+                    if exact_matched_indices.insert(track_idx) {
+                        candidates.push(MatchCandidate {
+                            path: library[track_idx].path.clone(),
+                            score: EXACT_MATCH_THRESHOLD,
+                            match_type: "exact".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // If we found exact matches, return them immediately
+    if !candidates.is_empty() {
+        return candidates;
+    }
+
+    // SLOW PATH: Fall back to fuzzy matching only if no exact matches found
+    for (track_idx, track) in library.iter().enumerate() {
         let mut best_score = 0.0;
         let mut match_type = String::new();
 
-        // Try exact artist + title match first
+        // Fuzzy match on both artist and title
         for entry_artist in &entry.artist_keys {
             for entry_title in &entry.title_keys {
                 for track_artist in &track.artist_variants {
                     for track_title in &track.title_variants {
-                        // Exact match
-                        if entry_artist == track_artist && entry_title == track_title {
-                            best_score = EXACT_MATCH_THRESHOLD;
-                            match_type = "exact".to_string();
-                            break;
-                        }
-
-                        // Fuzzy match on both artist and title
                         let artist_sim = jaro_winkler(entry_artist, track_artist);
                         let title_sim = jaro_winkler(entry_title, track_title);
 
