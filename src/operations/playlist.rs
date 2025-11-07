@@ -350,11 +350,6 @@ fn expand_artist_keys(raw: &str) -> Vec<String> {
 }
 
 fn expand_title_variants(raw_title: &str, artist_keys: &[String]) -> Vec<String> {
-    let mut normalized = utils::normalize_for_comparison(raw_title);
-    if normalized.is_empty() {
-        return Vec::new();
-    }
-
     let mut seen = HashSet::new();
     let mut variants = Vec::new();
     let mut push_variant = |value: String| {
@@ -363,7 +358,64 @@ fn expand_title_variants(raw_title: &str, artist_keys: &[String]) -> Vec<String>
         }
     };
 
-    // Original normalized version
+    // CRITICAL: Strip suffixes from RAW title BEFORE normalization
+    // This preserves dashes so we can detect patterns like " - Remaster"
+    let mut working_raw = raw_title.to_string();
+
+    // Common patterns to strip (case-insensitive)
+    let patterns_to_strip = [
+        " - Remaster",
+        " - Remastered",
+        " - 2007 Remaster",
+        " - 2009 Remaster",
+        " - 2011 Remaster",
+        " - 2013 Remaster",
+        " - 2014 Remaster",
+        " - 2015 Remaster",
+        " - 2018 Remaster",
+        " - 2024 Remaster",
+        " - Remix",
+        " - Radio Edit",
+        " - Album Version",
+        " - Single Version",
+        " - Extended Version",
+        " - Live",
+        " - Acoustic",
+        " - Demo",
+        " - Edit",
+        " - Mix",
+        " - Version",
+    ];
+
+    let lower = working_raw.to_lowercase();
+    for pattern in &patterns_to_strip {
+        if let Some(pos) = lower.rfind(&pattern.to_lowercase()) {
+            working_raw = working_raw[..pos].to_string();
+            break; // Only strip one suffix
+        }
+    }
+
+    // Also try to strip anything after the last " - " if it contains certain keywords
+    if let Some(last_dash) = working_raw.rfind(" - ") {
+        let after_dash = working_raw[last_dash + 3..].to_lowercase();
+        let suspicious_keywords = [
+            "remaster", "remix", "edit", "version", "live", "acoustic",
+            "radio", "album", "single", "vocal", "instrumental", "feat",
+            "ft", "featuring", "with", "explicit", "clean", "demo"
+        ];
+
+        if suspicious_keywords.iter().any(|kw| after_dash.contains(kw)) {
+            working_raw = working_raw[..last_dash].to_string();
+        }
+    }
+
+    // NOW normalize the cleaned raw title
+    let mut normalized = utils::normalize_for_comparison(&working_raw);
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    // Add the main normalized variant
     push_variant(normalized.clone());
 
     // Strip artist prefix if present
@@ -379,23 +431,12 @@ fn expand_title_variants(raw_title: &str, artist_keys: &[String]) -> Vec<String>
         }
     }
 
-    // Strip common parentheticals and bracketed content
-    // These patterns help remove: (Remastered), [Explicit], (feat. Artist), etc.
-    let mut working = normalized.clone();
-    working = remove_parentheticals(&working);
-    working = remove_brackets(&working);
-
-    let cleaned = working.trim().to_string();
+    // Strip parentheticals and brackets from normalized version
+    let mut cleaned = remove_parentheticals(&normalized);
+    cleaned = remove_brackets(&cleaned);
+    let cleaned = cleaned.trim().to_string();
     if !cleaned.is_empty() && cleaned != normalized {
         push_variant(cleaned);
-    }
-
-    // Also try stripping everything after " - "
-    if let Some(dash_pos) = normalized.find(" - ") {
-        let before_dash = normalized[..dash_pos].trim().to_string();
-        if !before_dash.is_empty() {
-            push_variant(before_dash);
-        }
     }
 
     variants
