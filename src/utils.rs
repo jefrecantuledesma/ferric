@@ -49,12 +49,38 @@ pub fn clamp_component(s: &str, max_len: usize) -> String {
 }
 
 /// Normalize text for comparison (lowercase, alphanumeric only, single spaces)
+/// Enhanced to handle apostrophes, accents, and common special characters
 pub fn normalize_for_comparison(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
-        .collect::<String>()
-        .split_whitespace()
+    let mut result = s.to_lowercase();
+
+    // Replace curly apostrophes with straight ones first
+    result = result.replace('\u{2019}', "'").replace('\u{2018}', "'");
+
+    // Common replacements to improve matching
+    result = result.replace("&", "and");
+
+    // Remove common apostrophe patterns (but keep the letter before)
+    result = result.replace("'s ", " ");      // possessive
+    result = result.replace("'t ", "t ");     // can't → cant
+    result = result.replace("'re ", "re ");   // you're → youre
+    result = result.replace("'ve ", "ve ");   // I've → ive
+    result = result.replace("'ll ", "ll ");   // I'll → ill
+    result = result.replace("'d ", "d ");     // I'd → id
+    result = result.replace("'m ", "m ");     // I'm → im
+
+    // Handle remaining apostrophes at word boundaries
+    result = result.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c.is_whitespace() {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>();
+
+    // Collapse whitespace and trim
+    result.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
 }

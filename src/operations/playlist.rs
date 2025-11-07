@@ -3,10 +3,11 @@ use crate::metadata::AudioMetadata;
 use crate::utils;
 use anyhow::{anyhow, Context, Result};
 use csv::ReaderBuilder;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use strsim::jaro_winkler;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
@@ -26,6 +27,13 @@ struct PlaylistEntry {
     title_keys: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct MatchCandidate {
+    path: PathBuf,
+    score: f64,
+    match_type: String,
+}
+
 /// Build an .m3u playlist by matching Exportify CSV rows to local audio files.
 pub fn run(options: PlaylistImportOptions) -> Result<()> {
     logger::stage("Generating playlist from CSV export");
@@ -41,58 +49,61 @@ pub fn run(options: PlaylistImportOptions) -> Result<()> {
         return Ok(());
     }
 
-    let (artist_title_index, title_index, artist_lookup) =
-        build_library_index(&options.library_dir, options.verbose)?;
+    let library_tracks = build_library_index(&options.library_dir, options.verbose)?;
 
     let mut matched_paths = Vec::with_capacity(entries.len());
     let mut missing = Vec::new();
 
     for entry in &entries {
-        let mut matched: Option<(PathBuf, &'static str)> = None;
+        let candidates = find_matches(&entry, &library_tracks, options.verbose);
 
-        'outer: for artist_key in &entry.artist_keys {
-            for title_key in &entry.title_keys {
-                let lookup_key = (artist_key.clone(), title_key.clone());
-                if let Some(paths) = artist_title_index.get(&lookup_key) {
-                    matched = Some((paths[0].clone(), "artist-title"));
-                    break 'outer;
-                }
-            }
-        }
-
-        if matched.is_none() {
-            for title_key in &entry.title_keys {
-                if let Some(paths) = title_index.get(title_key) {
-                    if paths.len() == 1 {
-                        let candidate = &paths[0];
-                        if let Some(artists) = artist_lookup.get(candidate) {
-                            if artists
-                                .iter()
-                                .any(|artist| entry.artist_keys.contains(artist))
-                            {
-                                matched = Some((candidate.clone(), "title-only"));
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some((path, strategy)) = matched {
+        if candidates.is_empty() {
+            missing.push(format!("{} - {}", entry.artist_raw, entry.title_raw));
+        } else if candidates.len() == 1 {
+            let candidate = &candidates[0];
             logger::debug(
                 &format!(
-                    "Matched '{}' - '{}' to {} ({})",
+                    "Matched '{}' - '{}' to {} (score: {:.2}, type: {})",
                     entry.artist_raw,
                     entry.title_raw,
-                    path.display(),
-                    strategy
+                    candidate.path.display(),
+                    candidate.score,
+                    candidate.match_type
                 ),
                 options.verbose,
             );
-            matched_paths.push(path);
+            matched_paths.push(candidate.path.clone());
         } else {
-            missing.push(format!("{} - {}", entry.artist_raw, entry.title_raw));
+            // Multiple matches found - let user choose
+            logger::plain("");
+            logger::warning(&format!(
+                "Multiple matches found for: {} - {}",
+                entry.artist_raw, entry.title_raw
+            ));
+
+            for (i, candidate) in candidates.iter().enumerate() {
+                logger::plain(&format!(
+                    "  {}. {} (score: {:.2}, {})",
+                    i + 1,
+                    candidate.path.display(),
+                    candidate.score,
+                    candidate.match_type
+                ));
+            }
+
+            logger::plain("  0. Skip this track");
+            logger::plain("");
+
+            let choice = prompt_user_choice(candidates.len())?;
+
+            if choice > 0 {
+                let selected = &candidates[choice - 1];
+                logger::success(&format!("Selected: {}", selected.path.display()));
+                matched_paths.push(selected.path.clone());
+            } else {
+                logger::info("Skipped");
+                missing.push(format!("{} - {}", entry.artist_raw, entry.title_raw));
+            }
         }
     }
 
@@ -196,18 +207,19 @@ fn strip_bom(value: &str) -> &str {
     value.strip_prefix('\u{feff}').unwrap_or(value)
 }
 
+#[derive(Debug, Clone)]
+struct LibraryTrack {
+    path: PathBuf,
+    artist_variants: Vec<String>,
+    title_variants: Vec<String>,
+}
+
 fn build_library_index(
     library_dir: &Path,
     verbose: bool,
-) -> Result<(
-    HashMap<(String, String), Vec<PathBuf>>,
-    HashMap<String, Vec<PathBuf>>,
-    HashMap<PathBuf, Vec<String>>,
-)> {
+) -> Result<Vec<LibraryTrack>> {
     logger::info("Indexing local audio library...");
-    let mut map: HashMap<(String, String), Vec<PathBuf>> = HashMap::new();
-    let mut title_map: HashMap<String, Vec<PathBuf>> = HashMap::new();
-    let mut artist_lookup: HashMap<PathBuf, Vec<String>> = HashMap::new();
+    let mut tracks = Vec::new();
 
     for entry in WalkDir::new(library_dir)
         .into_iter()
@@ -241,8 +253,6 @@ fn build_library_index(
                     continue;
                 }
 
-                artist_lookup.insert(path.clone(), artist_variants.clone());
-
                 let title_variants = expand_title_variants(&metadata.get_title(), &artist_variants);
                 if title_variants.is_empty() {
                     logger::debug(
@@ -252,28 +262,21 @@ fn build_library_index(
                     continue;
                 }
 
-                for title in &title_variants {
-                    let entry = title_map.entry(title.clone()).or_insert_with(Vec::new);
-                    push_unique(entry, &path);
-                }
+                logger::debug(
+                    &format!(
+                        "Indexed '{}' - '{}' ({})",
+                        artist_variants.first().unwrap_or(&"?".to_string()),
+                        title_variants.first().unwrap_or(&"?".to_string()),
+                        path.display()
+                    ),
+                    verbose,
+                );
 
-                for artist in &artist_variants {
-                    for title in &title_variants {
-                        logger::debug(
-                            &format!(
-                                "Indexed track '{}' - '{}' ({})",
-                                artist,
-                                title,
-                                path.display()
-                            ),
-                            verbose,
-                        );
-                        let entry = map
-                            .entry((artist.clone(), title.clone()))
-                            .or_insert_with(Vec::new);
-                        push_unique(entry, &path);
-                    }
-                }
+                tracks.push(LibraryTrack {
+                    path,
+                    artist_variants,
+                    title_variants,
+                });
             }
             Err(err) => {
                 logger::error(&format!(
@@ -285,8 +288,8 @@ fn build_library_index(
         }
     }
 
-    logger::success(&format!("Indexed {} unique artist/title pairs", map.len()));
-    Ok((map, title_map, artist_lookup))
+    logger::success(&format!("Indexed {} tracks", tracks.len()));
+    Ok(tracks)
 }
 
 fn write_m3u(paths: &[PathBuf], output: &Path) -> Result<()> {
@@ -347,7 +350,7 @@ fn expand_artist_keys(raw: &str) -> Vec<String> {
 }
 
 fn expand_title_variants(raw_title: &str, artist_keys: &[String]) -> Vec<String> {
-    let normalized = utils::normalize_for_comparison(raw_title);
+    let mut normalized = utils::normalize_for_comparison(raw_title);
     if normalized.is_empty() {
         return Vec::new();
     }
@@ -360,23 +363,201 @@ fn expand_title_variants(raw_title: &str, artist_keys: &[String]) -> Vec<String>
         }
     };
 
+    // Original normalized version
     push_variant(normalized.clone());
 
+    // Strip artist prefix if present
     for artist in artist_keys {
         let prefix = format!("{} ", artist);
         if normalized.starts_with(&prefix) {
             let stripped = normalized[prefix.len()..].trim().to_string();
             if !stripped.is_empty() {
-                push_variant(stripped);
+                push_variant(stripped.clone());
+                normalized = stripped; // Use this for further processing
+                break;
             }
+        }
+    }
+
+    // Strip common parentheticals and bracketed content
+    // These patterns help remove: (Remastered), [Explicit], (feat. Artist), etc.
+    let mut working = normalized.clone();
+    working = remove_parentheticals(&working);
+    working = remove_brackets(&working);
+
+    let cleaned = working.trim().to_string();
+    if !cleaned.is_empty() && cleaned != normalized {
+        push_variant(cleaned);
+    }
+
+    // Also try stripping everything after " - "
+    if let Some(dash_pos) = normalized.find(" - ") {
+        let before_dash = normalized[..dash_pos].trim().to_string();
+        if !before_dash.is_empty() {
+            push_variant(before_dash);
         }
     }
 
     variants
 }
 
-fn push_unique(vec: &mut Vec<PathBuf>, path: &Path) {
-    if !vec.iter().any(|existing| existing == path) {
-        vec.push(path.to_path_buf());
+fn remove_parentheticals(s: &str) -> String {
+    let mut result = String::new();
+    let mut depth: i32 = 0;
+
+    for c in s.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {
+                if depth == 0 {
+                    result.push(c);
+                }
+            }
+        }
+    }
+
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn remove_brackets(s: &str) -> String {
+    let mut result = String::new();
+    let mut depth: i32 = 0;
+
+    for c in s.chars() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            _ => {
+                if depth == 0 {
+                    result.push(c);
+                }
+            }
+        }
+    }
+
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn find_matches(
+    entry: &PlaylistEntry,
+    library: &[LibraryTrack],
+    _verbose: bool,
+) -> Vec<MatchCandidate> {
+    let mut candidates: Vec<MatchCandidate> = Vec::new();
+    const EXACT_MATCH_THRESHOLD: f64 = 1.0;
+    const FUZZY_MATCH_THRESHOLD: f64 = 0.85;
+    const MIN_SCORE_THRESHOLD: f64 = 0.75;
+
+    for track in library {
+        let mut best_score = 0.0;
+        let mut match_type = String::new();
+
+        // Try exact artist + title match first
+        for entry_artist in &entry.artist_keys {
+            for entry_title in &entry.title_keys {
+                for track_artist in &track.artist_variants {
+                    for track_title in &track.title_variants {
+                        // Exact match
+                        if entry_artist == track_artist && entry_title == track_title {
+                            best_score = EXACT_MATCH_THRESHOLD;
+                            match_type = "exact".to_string();
+                            break;
+                        }
+
+                        // Fuzzy match on both artist and title
+                        let artist_sim = jaro_winkler(entry_artist, track_artist);
+                        let title_sim = jaro_winkler(entry_title, track_title);
+
+                        // Combined score (weighted average: title is more important)
+                        let combined_score = (title_sim * 0.7) + (artist_sim * 0.3);
+
+                        if combined_score > best_score && combined_score >= FUZZY_MATCH_THRESHOLD {
+                            best_score = combined_score;
+                            match_type = format!("fuzzy (A:{:.2}, T:{:.2})", artist_sim, title_sim);
+                        }
+                    }
+                }
+            }
+        }
+
+        // If no good artist+title match, try title-only with artist verification
+        if best_score < FUZZY_MATCH_THRESHOLD {
+            for entry_title in &entry.title_keys {
+                for track_title in &track.title_variants {
+                    let title_sim = jaro_winkler(entry_title, track_title);
+
+                    if title_sim >= FUZZY_MATCH_THRESHOLD {
+                        // Verify artist has some similarity
+                        let mut artist_match = false;
+                        for entry_artist in &entry.artist_keys {
+                            for track_artist in &track.artist_variants {
+                                if jaro_winkler(entry_artist, track_artist) > 0.7 {
+                                    artist_match = true;
+                                    break;
+                                }
+                            }
+                            if artist_match {
+                                break;
+                            }
+                        }
+
+                        if artist_match && title_sim > best_score {
+                            best_score = title_sim * 0.9; // Slightly lower confidence
+                            match_type = format!("title-fuzzy ({:.2})", title_sim);
+                        }
+                    }
+                }
+            }
+        }
+
+        if best_score >= MIN_SCORE_THRESHOLD {
+            candidates.push(MatchCandidate {
+                path: track.path.clone(),
+                score: best_score,
+                match_type,
+            });
+        }
+    }
+
+    // Sort by score descending
+    candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // If we have a perfect match, return only that
+    if !candidates.is_empty() && candidates[0].score >= EXACT_MATCH_THRESHOLD {
+        return vec![candidates[0].clone()];
+    }
+
+    // Return top candidates (limit to avoid overwhelming user)
+    const MAX_CANDIDATES: usize = 5;
+    candidates.truncate(MAX_CANDIDATES);
+
+    // Filter to only show candidates with similar scores (within 0.05 of best)
+    if let Some(best) = candidates.first() {
+        let cutoff = best.score - 0.05;
+        candidates.retain(|c| c.score >= cutoff);
+    }
+
+    candidates
+}
+
+fn prompt_user_choice(max_choice: usize) -> Result<usize> {
+    loop {
+        print!("Enter choice (0-{}): ", max_choice);
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        match input.trim().parse::<usize>() {
+            Ok(choice) if choice <= max_choice => return Ok(choice),
+            _ => {
+                println!("Invalid choice. Please enter a number between 0 and {}.", max_choice);
+            }
+        }
     }
 }
