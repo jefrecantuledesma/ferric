@@ -17,7 +17,8 @@ use walkdir::WalkDir;
 pub struct PlaylistImportOptions {
     pub playlist_csv: PathBuf,
     pub library_dir: PathBuf,
-    pub output_path: Option<PathBuf>,
+    pub playlist_folder: PathBuf,
+    pub auto_select: bool,
     pub dry_run: bool,
     pub verbose: bool,
 }
@@ -85,35 +86,53 @@ pub fn run(options: PlaylistImportOptions) -> Result<()> {
             );
             matched_paths.push(candidate.path.clone());
         } else {
-            // Multiple matches found - let user choose
-            logger::plain("");
-            logger::warning(&format!(
-                "Multiple matches found for: {} - {}",
-                entry.artist_raw, entry.title_raw
-            ));
-
-            for (i, candidate) in candidates.iter().enumerate() {
-                logger::plain(&format!(
-                    "  {}. {} (score: {:.2}, {})",
-                    i + 1,
-                    candidate.path.display(),
-                    candidate.score,
-                    candidate.match_type
-                ));
-            }
-
-            logger::plain("  0. Skip this track");
-            logger::plain("");
-
-            let choice = prompt_user_choice(candidates.len())?;
-
-            if choice > 0 {
-                let selected = &candidates[choice - 1];
-                logger::success(&format!("Selected: {}", selected.path.display()));
-                matched_paths.push(selected.path.clone());
+            // Multiple matches found
+            if options.auto_select {
+                // Auto-select the best (highest score) match
+                let best = &candidates[0];
+                logger::debug(
+                    &format!(
+                        "Auto-selected '{}' - '{}' to {} (score: {:.2}, type: {})",
+                        entry.artist_raw,
+                        entry.title_raw,
+                        best.path.display(),
+                        best.score,
+                        best.match_type
+                    ),
+                    options.verbose,
+                );
+                matched_paths.push(best.path.clone());
             } else {
-                logger::info("Skipped");
-                missing.push(format!("{} - {}", entry.artist_raw, entry.title_raw));
+                // Let user choose
+                logger::plain("");
+                logger::warning(&format!(
+                    "Multiple matches found for: {} - {}",
+                    entry.artist_raw, entry.title_raw
+                ));
+
+                for (i, candidate) in candidates.iter().enumerate() {
+                    logger::plain(&format!(
+                        "  {}. {} (score: {:.2}, {})",
+                        i + 1,
+                        candidate.path.display(),
+                        candidate.score,
+                        candidate.match_type
+                    ));
+                }
+
+                logger::plain("  0. Skip this track");
+                logger::plain("");
+
+                let choice = prompt_user_choice(candidates.len())?;
+
+                if choice > 0 {
+                    let selected = &candidates[choice - 1];
+                    logger::success(&format!("Selected: {}", selected.path.display()));
+                    matched_paths.push(selected.path.clone());
+                } else {
+                    logger::info("Skipped");
+                    missing.push(format!("{} - {}", entry.artist_raw, entry.title_raw));
+                }
             }
         }
     }
@@ -128,10 +147,12 @@ pub fn run(options: PlaylistImportOptions) -> Result<()> {
         }
     }
 
-    let output_path = options
-        .output_path
-        .clone()
-        .unwrap_or_else(|| default_output_path(&options.playlist_csv));
+    // Generate output path from CSV filename in the playlist folder
+    let csv_name = options.playlist_csv
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("playlist");
+    let output_path = options.playlist_folder.join(format!("{}.m3u", csv_name));
 
     if options.dry_run {
         logger::warning("Dry-run enabled; skipping .m3u generation");

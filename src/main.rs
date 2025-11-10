@@ -161,9 +161,13 @@ enum Commands {
         #[arg(short, long)]
         library: PathBuf,
 
-        /// Optional output path for generated .m3u (defaults to playlist path with .m3u)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
+        /// Playlist folder where .m3u files will be stored (required for relative path calculation)
+        #[arg(short = 'f', long)]
+        playlist_folder: PathBuf,
+
+        /// Automatically select the best match instead of prompting for conflicts
+        #[arg(long)]
+        auto_select: bool,
     },
 }
 
@@ -307,12 +311,14 @@ fn main() -> Result<()> {
         Commands::PlaylistImport {
             playlist,
             library,
-            output,
+            playlist_folder,
+            auto_select,
         } => {
             let opts = playlist::PlaylistImportOptions {
                 playlist_csv: playlist,
                 library_dir: library,
-                output_path: output,
+                playlist_folder,
+                auto_select,
                 dry_run: cli.dry_run,
                 verbose: cli.verbose,
             };
