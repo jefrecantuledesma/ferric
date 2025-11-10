@@ -433,6 +433,24 @@ struct PlaylistTrack {
     path_line: String,
 }
 
+/// Compute relative path from playlist location to track location
+fn make_relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
+    // Canonicalize both paths to handle symlinks and relative components
+    let from_abs = fs::canonicalize(from).unwrap_or_else(|_| from.to_path_buf());
+    let to_abs = fs::canonicalize(to).unwrap_or_else(|_| to.to_path_buf());
+
+    // Get the directory containing the playlist file
+    let from_dir = from_abs.parent().unwrap_or(&from_abs);
+
+    // Try to construct relative path
+    if let Some(rel_path) = pathdiff::diff_paths(&to_abs, from_dir) {
+        Some(rel_path)
+    } else {
+        // Fallback to absolute path if relative path construction fails
+        Some(to_abs)
+    }
+}
+
 fn write_m3u(paths: &[PathBuf], output: &Path) -> Result<()> {
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
@@ -444,39 +462,34 @@ fn write_m3u(paths: &[PathBuf], output: &Path) -> Result<()> {
     let playlist_tracks: Vec<PlaylistTrack> = paths
         .par_iter()
         .filter_map(|path| {
-            // Get file extension
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("opus");
-
-            // Try to get metadata for both #EXTINF and path construction
+            // Try to get metadata for #EXTINF line
             if let Ok(metadata) = AudioMetadata::from_file(path) {
                 let duration = metadata.duration_secs.unwrap_or(0.0).round() as i32;
                 let artist = metadata.artist.as_deref().unwrap_or("Unknown Artist");
                 let track_title = metadata.title.as_deref().unwrap_or("Unknown Title");
 
-                // Build #EXTINF line with "Artist - Title" format
+                // Build #EXTINF line with "Artist - Title" format (URL encoded for display)
                 let extinf_title = format!("{} - {}", artist, track_title);
                 let extinf_line = format!("#EXTINF:{},{}", duration, url_encode(&extinf_title));
 
-                // Build path as "Artist - Title.ext" using metadata (Navidrome/Arpeggi format)
-                // This allows Navidrome to match by metadata regardless of actual filesystem path
-                let virtual_path = format!("{} - {}.{}", artist, track_title, ext);
-                let path_line = url_encode(&virtual_path);
+                // Compute relative path from playlist to track (actual filesystem path, no encoding)
+                let rel_path = make_relative_path(output, path)?;
+                let path_line = rel_path.to_string_lossy().to_string();
 
                 Some(PlaylistTrack {
                     extinf_line,
                     path_line,
                 })
             } else {
-                // Fallback: if we can't read metadata, use the filename as-is
+                // Fallback: if we can't read metadata, still compute relative path
+                let rel_path = make_relative_path(output, path)?;
+                let path_line = rel_path.to_string_lossy().to_string();
+
                 path.file_name().map(|filename| {
                     let filename_str = filename.to_string_lossy();
-                    let encoded = url_encode(&filename_str);
                     PlaylistTrack {
-                        extinf_line: format!("#EXTINF:-1,{}", encoded),
-                        path_line: encoded,
+                        extinf_line: format!("#EXTINF:-1,{}", url_encode(&filename_str)),
+                        path_line,
                     }
                 })
             }
