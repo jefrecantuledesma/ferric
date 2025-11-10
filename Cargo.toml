@@ -54,6 +54,9 @@ dirs = "5.0"
 # Base64 encoding for OPUS cover art
 base64 = "0.22"
 
+# Relative path computation for playlists
+pathdiff = "0.2"
+
 [dev-dependencies]
 tempfile = "3.10"
 assert_cmd = "2.0"
