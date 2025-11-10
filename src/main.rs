@@ -87,6 +87,25 @@ enum Commands {
         input: PathBuf,
     },
 
+    /// Fix missing metadata (artist, album, cover art)
+    FixMetadata {
+        /// Directory to process
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Check for missing artist
+        #[arg(long)]
+        artist: bool,
+
+        /// Check for missing album
+        #[arg(long)]
+        album: bool,
+
+        /// Check for missing album cover
+        #[arg(long)]
+        cover: bool,
+    },
+
     /// Find and remove duplicate files based on metadata
     Dedupe {
         /// Input directory to scan
@@ -223,6 +242,23 @@ fn main() -> Result<()> {
                 verbose: cli.verbose,
             };
             fix_naming::run(opts).map(|_| ())
+        }
+
+        Commands::FixMetadata {
+            input,
+            artist,
+            album,
+            cover,
+        } => {
+            let opts = fix_metadata::FixMetadataOptions {
+                input_dir: input,
+                check_artist: artist,
+                check_album: album,
+                check_cover: cover,
+                dry_run: cli.dry_run,
+                verbose: cli.verbose,
+            };
+            fix_metadata::run(opts)
         }
 
         Commands::Dedupe { input, auto_remove } => {

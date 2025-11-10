@@ -409,6 +409,23 @@ fn build_library_index(
     Ok(tracks)
 }
 
+/// URL-encode a string for use in M3U playlists
+fn url_encode(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' || c == '/' {
+                c.to_string()
+            } else {
+                // URL encode the character
+                c.encode_utf8(&mut [0; 4])
+                    .bytes()
+                    .map(|b| format!("%{:02X}", b))
+                    .collect::<String>()
+            }
+        })
+        .collect()
+}
+
 fn write_m3u(paths: &[PathBuf], output: &Path) -> Result<()> {
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
@@ -418,9 +435,35 @@ fn write_m3u(paths: &[PathBuf], output: &Path) -> Result<()> {
     let mut file = File::create(output)
         .with_context(|| format!("Failed to create .m3u file at {}", output.display()))?;
     writeln!(file, "#EXTM3U")?;
+
     for path in paths {
-        let absolute = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
-        writeln!(file, "{}", absolute.to_string_lossy())?;
+        // Try to get duration and metadata for #EXTINF line
+        let mut duration = -1;
+        let mut title = String::new();
+
+        if let Ok(metadata) = AudioMetadata::from_file(path) {
+            duration = metadata.duration_secs.unwrap_or(0.0).round() as i32;
+
+            // Build title as "Artist - Title"
+            let artist = metadata.artist.as_deref().unwrap_or("Unknown Artist");
+            let track_title = metadata.title.as_deref().unwrap_or("Unknown Title");
+            title = format!("{} - {}", artist, track_title);
+        }
+
+        // Write #EXTINF line if we have metadata
+        if !title.is_empty() {
+            writeln!(file, "#EXTINF:{},{}", duration, url_encode(&title))?;
+        }
+
+        // Write the file path - use just the filename (relative path)
+        if let Some(filename) = path.file_name() {
+            let filename_str = filename.to_string_lossy();
+            writeln!(file, "{}", url_encode(&filename_str))?;
+        } else {
+            // Fallback to absolute path if no filename (shouldn't happen)
+            let absolute = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            writeln!(file, "{}", url_encode(&absolute.to_string_lossy()))?;
+        }
     }
 
     Ok(())

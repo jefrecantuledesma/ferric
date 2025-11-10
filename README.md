@@ -68,9 +68,10 @@ ferric <COMMAND> [OPTIONS]
 4. **fix-naming** - Normalize names (apostrophes, case, whitespace)
 5. **lowercase** - Convert all names to lowercase
 6. **dedupe** - Find and remove duplicate files based on metadata
-7. **unified** - Run complete pipeline: convert → sort → normalize
-8. **gen-config** - Generate example configuration file
-9. **playlist-import** - Build .m3u playlists from Exportify CSV exports
+7. **fix-metadata** - Interactively fix missing metadata (artist, album, cover art)
+8. **unified** - Run complete pipeline: convert → sort → normalize
+9. **gen-config** - Generate example configuration file
+10. **playlist-import** - Build .m3u playlists from Exportify CSV exports
 
 ### Global Options
 
@@ -107,6 +108,28 @@ ferric fix-naming -i ~/Music/Library
 ```bash
 ferric dedupe -d ~/Music/Library
 ```
+
+#### Fix missing metadata interactively
+```bash
+# Check for missing album covers
+# Groups by album - prompts once per album, embeds to all tracks in parallel
+ferric fix-metadata --cover -i ~/Music/Library
+
+# Check for missing artist and album tags
+# Groups by folder - prompts once per folder, updates all files in parallel
+ferric fix-metadata --artist --album -i ~/Music/Library
+
+# Check all metadata types
+ferric fix-metadata --artist --album --cover -i ~/Music/Library
+
+# Preview what's missing (dry-run)
+ferric fix-metadata --dry-run --cover -i ~/Music/Library
+```
+
+**Smart Grouping:**
+- **Album covers**: Groups by album metadata (e.g., 20 tracks from "Dark Side of the Moon" = 1 prompt)
+- **Artist/Album names**: Groups by folder (e.g., all files in "Pink Floyd/The Wall/" = 1 prompt)
+- **Parallelized**: Scans and applies changes to multiple files simultaneously for speed
 
 #### Generate an .m3u playlist from Exportify CSV
 ```bash
