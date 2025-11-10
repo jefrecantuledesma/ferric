@@ -426,44 +426,73 @@ fn url_encode(s: &str) -> String {
         .collect()
 }
 
+/// Playlist entry with pre-extracted metadata
+#[derive(Debug)]
+struct PlaylistTrack {
+    extinf_line: String,
+    path_line: String,
+}
+
 fn write_m3u(paths: &[PathBuf], output: &Path) -> Result<()> {
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create parent directory {}", parent.display()))?;
     }
 
+    // Extract metadata in parallel for all tracks
+    logger::info("Extracting metadata for playlist entries...");
+    let playlist_tracks: Vec<PlaylistTrack> = paths
+        .par_iter()
+        .filter_map(|path| {
+            // Get file extension
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("opus");
+
+            // Try to get metadata for both #EXTINF and path construction
+            if let Ok(metadata) = AudioMetadata::from_file(path) {
+                let duration = metadata.duration_secs.unwrap_or(0.0).round() as i32;
+                let artist = metadata.artist.as_deref().unwrap_or("Unknown Artist");
+                let track_title = metadata.title.as_deref().unwrap_or("Unknown Title");
+
+                // Build #EXTINF line with "Artist - Title" format
+                let extinf_title = format!("{} - {}", artist, track_title);
+                let extinf_line = format!("#EXTINF:{},{}", duration, url_encode(&extinf_title));
+
+                // Build path as "Artist - Title.ext" using metadata (Navidrome/Arpeggi format)
+                // This allows Navidrome to match by metadata regardless of actual filesystem path
+                let virtual_path = format!("{} - {}.{}", artist, track_title, ext);
+                let path_line = url_encode(&virtual_path);
+
+                Some(PlaylistTrack {
+                    extinf_line,
+                    path_line,
+                })
+            } else {
+                // Fallback: if we can't read metadata, use the filename as-is
+                path.file_name().map(|filename| {
+                    let filename_str = filename.to_string_lossy();
+                    let encoded = url_encode(&filename_str);
+                    PlaylistTrack {
+                        extinf_line: format!("#EXTINF:-1,{}", encoded),
+                        path_line: encoded,
+                    }
+                })
+            }
+        })
+        .collect();
+
+    logger::success(&format!("Extracted metadata for {} tracks", playlist_tracks.len()));
+
+    // Write all tracks to the file
     let mut file = File::create(output)
         .with_context(|| format!("Failed to create .m3u file at {}", output.display()))?;
     writeln!(file, "#EXTM3U")?;
 
-    for path in paths {
-        // Try to get duration and metadata for #EXTINF line
-        let mut duration = -1;
-        let mut title = String::new();
-
-        if let Ok(metadata) = AudioMetadata::from_file(path) {
-            duration = metadata.duration_secs.unwrap_or(0.0).round() as i32;
-
-            // Build title as "Artist - Title"
-            let artist = metadata.artist.as_deref().unwrap_or("Unknown Artist");
-            let track_title = metadata.title.as_deref().unwrap_or("Unknown Title");
-            title = format!("{} - {}", artist, track_title);
-        }
-
-        // Write #EXTINF line if we have metadata
-        if !title.is_empty() {
-            writeln!(file, "#EXTINF:{},{}", duration, url_encode(&title))?;
-        }
-
-        // Write the file path - use just the filename (relative path)
-        if let Some(filename) = path.file_name() {
-            let filename_str = filename.to_string_lossy();
-            writeln!(file, "{}", url_encode(&filename_str))?;
-        } else {
-            // Fallback to absolute path if no filename (shouldn't happen)
-            let absolute = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
-            writeln!(file, "{}", url_encode(&absolute.to_string_lossy()))?;
-        }
+    for track in playlist_tracks {
+        writeln!(file, "{}", track.extinf_line)?;
+        writeln!(file, "{}", track.path_line)?;
     }
 
     Ok(())
