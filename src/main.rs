@@ -50,8 +50,8 @@ enum Commands {
         delete_original: bool,
     },
 
-    /// Sort files by metadata tags into Artist/Album structure
-    TagSort {
+    /// Sort files with intelligent quality comparison (only upgrades)
+    Sort {
         /// Input directory to scan
         #[arg(short, long)]
         input: PathBuf,
@@ -65,13 +65,13 @@ enum Commands {
         r#move: bool,
     },
 
-    /// Sort files with intelligent quality comparison (only upgrades)
-    Sort {
-        /// Input directory to scan
+    /// Merge an organized library into another, upgrading with better quality
+    Merge {
+        /// Source library directory to merge from
         #[arg(short, long)]
         input: PathBuf,
 
-        /// Output library directory
+        /// Target library directory to merge into
         #[arg(short, long)]
         output: PathBuf,
 
@@ -207,22 +207,6 @@ fn main() -> Result<()> {
             convert::run(opts).map(|_| ())
         }
 
-        Commands::TagSort {
-            input,
-            output,
-            r#move,
-        } => {
-            let opts = tag_sort::TagSortOptions {
-                input_dir: input,
-                output_dir: output,
-                do_move: r#move,
-                dry_run: cli.dry_run,
-                verbose: cli.verbose,
-                config,
-            };
-            tag_sort::run(opts).map(|_| ())
-        }
-
         Commands::Sort {
             input,
             output,
@@ -237,6 +221,22 @@ fn main() -> Result<()> {
                 config,
             };
             sort::run(opts).map(|_| ())
+        }
+
+        Commands::Merge {
+            input,
+            output,
+            r#move,
+        } => {
+            let opts = merge::MergeOptions {
+                input_dir: input,
+                output_dir: output,
+                do_move: r#move,
+                dry_run: cli.dry_run,
+                verbose: cli.verbose,
+                config,
+            };
+            merge::run(opts).map(|_| ())
         }
 
         Commands::FixNaming { input } => {
