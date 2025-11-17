@@ -80,6 +80,17 @@ enum Commands {
         r#move: bool,
     },
 
+    /// Merge multiple libraries using symlinks, keeping highest quality versions
+    MergeLibraries {
+        /// Input library directories to merge (specify multiple times)
+        #[arg(short, long, num_args = 1..)]
+        input: Vec<PathBuf>,
+
+        /// Output directory for merged library
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
     /// Fix naming issues (apostrophes, case, whitespace)
     FixNaming {
         /// Directory to process
@@ -237,6 +248,17 @@ fn main() -> Result<()> {
                 config,
             };
             merge::run(opts).map(|_| ())
+        }
+
+        Commands::MergeLibraries { input, output } => {
+            let opts = merge_libraries::MergeLibrariesOptions {
+                input_dirs: input,
+                output_dir: output,
+                dry_run: cli.dry_run,
+                verbose: cli.verbose,
+                config,
+            };
+            merge_libraries::run(opts).map(|_| ())
         }
 
         Commands::FixNaming { input } => {

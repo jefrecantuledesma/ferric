@@ -344,9 +344,9 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) | Analyzing metadata...")
             .unwrap()
-            .progress_chars("#>-"),
+            .progress_chars("█▓▒░"),
     );
 
     let file_info_list: Arc<Mutex<Vec<FileMetadataInfo>>> = Arc::new(Mutex::new(Vec::new()));
@@ -436,9 +436,9 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
                         let pb = ProgressBar::new(album_files.len() as u64);
                         pb.set_style(
                             ProgressStyle::default_bar()
-                                .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} Embedding...")
+                                .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) | Embedding covers...")
                                 .unwrap()
-                                .progress_chars("#>-"),
+                                .progress_chars("█▓▒░"),
                         );
 
                         let success_count = Arc::new(Mutex::new(0));
@@ -558,9 +558,9 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
                     let pb = ProgressBar::new(folder_files.len() as u64);
                     pb.set_style(
                         ProgressStyle::default_bar()
-                            .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} Updating...")
+                            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) | Updating metadata...")
                             .unwrap()
-                            .progress_chars("#>-"),
+                            .progress_chars("█▓▒░"),
                     );
 
                     let success_count = Arc::new(Mutex::new(0));

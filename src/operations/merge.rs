@@ -7,8 +7,10 @@ use crate::utils;
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use walkdir::WalkDir;
 
 pub struct MergeOptions {
@@ -51,9 +53,9 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) {msg}")
+            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) | Extracting metadata...")
             .unwrap()
-            .progress_chars("=>-"),
+            .progress_chars("█▓▒░"),
     );
 
     struct FileInfo {
@@ -122,14 +124,69 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
         file_infos.len()
     ));
 
-    // Phase 2: Sequential file operations (to avoid race conditions)
+    // Phase 1.5: Build index of existing files in output directory (MASSIVE performance optimization!)
+    logger::info("Building index of existing files...");
+    let existing_files_index: Arc<Mutex<HashMap<String, (PathBuf, u32)>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    if options.output_dir.exists() {
+        let existing_files: Vec<PathBuf> = WalkDir::new(&options.output_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .map(|e| e.path().to_path_buf())
+            .filter(|p| utils::is_audio_file(p))
+            .collect();
+
+        logger::info(&format!("Indexing {} existing files...", existing_files.len()));
+
+        let index_pb = ProgressBar::new(existing_files.len() as u64);
+        index_pb.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) | Building index...")
+                .unwrap()
+                .progress_chars("█▓▒░"),
+        );
+
+        existing_files.par_iter().for_each(|file| {
+            index_pb.inc(1);
+            if let Ok(metadata) = AudioMetadata::from_file(file) {
+                let artist = metadata.get_organizing_artist(options.config.naming.prefer_artist);
+                let album = metadata.get_album();
+                let title = metadata.get_title();
+                let title_normalized = utils::normalize_for_comparison(&title);
+
+                let artist_safe = utils::clamp_component(
+                    &utils::sanitize(&artist),
+                    options.config.naming.max_name_length,
+                );
+                let album_safe = utils::clamp_component(
+                    &utils::sanitize(&album),
+                    options.config.naming.max_name_length,
+                );
+
+                // Create a unique key: "artist/album/title"
+                let key = format!("{}/{}/{}", artist_safe, album_safe, title_normalized);
+                let quality_score = quality::calculate_quality_score(&metadata, &options.config);
+
+                let mut index = existing_files_index.lock().unwrap();
+                index.insert(key, (file.clone(), quality_score));
+            }
+        });
+
+        index_pb.finish_and_clear();
+        let index = existing_files_index.lock().unwrap();
+        logger::success(&format!("Indexed {} existing files", index.len()));
+    }
+
+    // Phase 2: Merging files with instant O(1) lookups!
     logger::info("Phase 2/2: Merging files...");
     let pb2 = ProgressBar::new(file_infos.len() as u64);
     pb2.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta})")
+            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) | Merging libraries...")
             .unwrap()
-            .progress_chars("=>-"),
+            .progress_chars("█▓▒░"),
     );
 
     for file_info in &file_infos {
@@ -141,29 +198,23 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
         let dest_path = &file_info.dest_path;
         let title_normalized = &file_info.title_normalized;
 
-        // Check for existing file with same title in the destination album
-        let mut existing_match: Option<(PathBuf, u32)> = None;
+        // O(1) lookup in the index instead of O(n) directory scan!
+        let artist = file_info.metadata.get_organizing_artist(options.config.naming.prefer_artist);
+        let album = file_info.metadata.get_album();
+        let artist_safe = utils::clamp_component(
+            &utils::sanitize(&artist),
+            options.config.naming.max_name_length,
+        );
+        let album_safe = utils::clamp_component(
+            &utils::sanitize(&album),
+            options.config.naming.max_name_length,
+        );
+        let lookup_key = format!("{}/{}/{}", artist_safe, album_safe, title_normalized);
 
-        if dest_dir.exists() {
-            for entry in WalkDir::new(dest_dir)
-                .max_depth(1)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file() && utils::is_audio_file(e.path()))
-            {
-                if let Ok(existing_meta) = AudioMetadata::from_file(entry.path()) {
-                    let existing_title = existing_meta.get_title();
-                    let existing_normalized = utils::normalize_for_comparison(&existing_title);
-
-                    if *title_normalized == existing_normalized {
-                        let existing_quality =
-                            quality::calculate_quality_score(&existing_meta, &options.config);
-                        existing_match = Some((entry.path().to_path_buf(), existing_quality));
-                        break;
-                    }
-                }
-            }
-        }
+        let existing_match: Option<(PathBuf, u32)> = {
+            let index = existing_files_index.lock().unwrap();
+            index.get(&lookup_key).cloned()
+        };
 
         // Decide what to do based on quality comparison
         let action = if let Some((existing_path, existing_quality)) = existing_match {

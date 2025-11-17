@@ -50,9 +50,9 @@ fn fix_files(root: &Path, stats: &mut OperationStats, options: &FixNamingOptions
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta})")
+            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) | Fixing file names...")
             .unwrap()
-            .progress_chars("=>-"),
+            .progress_chars("█▓▒░"),
     );
 
     for file in files {
@@ -126,9 +126,9 @@ fn fix_directories(
     let pb = ProgressBar::new(dirs.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta})")
+            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) | Fixing directory names...")
             .unwrap()
-            .progress_chars("=>-"),
+            .progress_chars("█▓▒░"),
     );
 
     for dir in dirs {

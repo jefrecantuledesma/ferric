@@ -75,6 +75,7 @@ pub fn run(options: ConvertOptions) -> Result<OperationStats> {
     let stats = OperationStats::new();
 
     // Collect all audio files
+    logger::info("Scanning for audio files...");
     let files: Vec<PathBuf> = WalkDir::new(&options.input_dir)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -83,14 +84,14 @@ pub fn run(options: ConvertOptions) -> Result<OperationStats> {
         .filter(|p| utils::is_audio_file(p))
         .collect();
 
-    logger::info(&format!("Found {} audio files", files.len()));
+    logger::info(&format!("Found {} audio files to convert", files.len()));
 
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) {msg}")
+            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) | {msg}")
             .unwrap()
-            .progress_chars("=>-"),
+            .progress_chars("█▓▒░"),
     );
 
     // Wrap stats in Arc<Mutex<>> for thread-safe parallel access

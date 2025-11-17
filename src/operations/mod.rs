@@ -3,6 +3,7 @@ pub mod dedupe;
 pub mod fix_metadata;
 pub mod fix_naming;
 pub mod merge;
+pub mod merge_libraries;
 pub mod playlist;
 pub mod sort;
 pub mod unified;

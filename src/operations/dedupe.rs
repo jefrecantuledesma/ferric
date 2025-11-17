@@ -5,6 +5,7 @@ use crate::operations::OperationStats;
 use crate::quality;
 use crate::utils;
 use anyhow::Result;
+use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
@@ -58,8 +59,18 @@ pub fn run(options: DedupeOptions) -> Result<OperationStats> {
         Arc::new(Mutex::new(HashMap::new()));
     let stats_mutex = Arc::new(Mutex::new(stats));
 
+    // Create progress bar for metadata extraction
+    let pb = ProgressBar::new(files.len() as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) | Analyzing metadata...")
+            .unwrap()
+            .progress_chars("█▓▒░"),
+    );
+
     // Process files in parallel
     files.par_iter().for_each(|file| {
+        pb.inc(1);
         {
             let mut stats = stats_mutex.lock().unwrap();
             stats.processed += 1;
@@ -93,6 +104,8 @@ pub fn run(options: DedupeOptions) -> Result<OperationStats> {
             }
         }
     });
+
+    pb.finish_and_clear();
 
     // Extract stats and map from Arc<Mutex<>>
     let mut stats = Arc::try_unwrap(stats_mutex).unwrap().into_inner().unwrap();
