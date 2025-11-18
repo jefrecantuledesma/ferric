@@ -148,7 +148,8 @@ pub fn run(options: PlaylistImportOptions) -> Result<()> {
     }
 
     // Generate output path from CSV filename in the playlist folder
-    let csv_name = options.playlist_csv
+    let csv_name = options
+        .playlist_csv
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("playlist");
@@ -342,10 +343,7 @@ fn save_cache(library_dir: &Path, tracks: &[LibraryTrack]) -> Result<()> {
     Ok(())
 }
 
-fn build_library_index(
-    library_dir: &Path,
-    verbose: bool,
-) -> Result<Vec<LibraryTrack>> {
+fn build_library_index(library_dir: &Path, verbose: bool) -> Result<Vec<LibraryTrack>> {
     // Try to load from cache first
     if let Some(tracks) = load_cached_index(library_dir) {
         return Ok(tracks);
@@ -362,60 +360,61 @@ fn build_library_index(
         .filter(|path| utils::is_audio_file(path))
         .collect();
 
-    logger::info(&format!("Found {} audio files, reading metadata...", audio_files.len()));
+    logger::info(&format!(
+        "Found {} audio files, reading metadata...",
+        audio_files.len()
+    ));
 
     // Process files in parallel using rayon
     let tracks: Vec<LibraryTrack> = audio_files
         .par_iter()
-        .filter_map(|path| {
-            match AudioMetadata::from_file(path) {
-                Ok(metadata) => {
-                    let track_artist = metadata.get_organizing_artist(true);
-                    let album_artist = metadata.get_organizing_artist(false);
+        .filter_map(|path| match AudioMetadata::from_file(path) {
+            Ok(metadata) => {
+                let track_artist = metadata.get_organizing_artist(true);
+                let album_artist = metadata.get_organizing_artist(false);
 
-                    let mut artist_variants = expand_artist_keys(&track_artist);
-                    if album_artist != track_artist {
-                        for variant in expand_artist_keys(&album_artist) {
-                            if !artist_variants.contains(&variant) {
-                                artist_variants.push(variant);
-                            }
+                let mut artist_variants = expand_artist_keys(&track_artist);
+                if album_artist != track_artist {
+                    for variant in expand_artist_keys(&album_artist) {
+                        if !artist_variants.contains(&variant) {
+                            artist_variants.push(variant);
                         }
                     }
+                }
 
-                    if artist_variants.is_empty() {
-                        if verbose {
-                            eprintln!("Skipping {} due to empty artist metadata", path.display());
-                        }
-                        return None;
-                    }
-
-                    let title_variants = expand_title_variants(&metadata.get_title(), &artist_variants);
-                    if title_variants.is_empty() {
-                        if verbose {
-                            eprintln!("Skipping {} due to empty title metadata", path.display());
-                        }
-                        return None;
-                    }
-
+                if artist_variants.is_empty() {
                     if verbose {
-                        eprintln!(
-                            "Indexed '{}' - '{}' ({})",
-                            artist_variants.first().unwrap_or(&"?".to_string()),
-                            title_variants.first().unwrap_or(&"?".to_string()),
-                            path.display()
-                        );
+                        eprintln!("Skipping {} due to empty artist metadata", path.display());
                     }
+                    return None;
+                }
 
-                    Some(LibraryTrack {
-                        path: path.clone(),
-                        artist_variants,
-                        title_variants,
-                    })
+                let title_variants = expand_title_variants(&metadata.get_title(), &artist_variants);
+                if title_variants.is_empty() {
+                    if verbose {
+                        eprintln!("Skipping {} due to empty title metadata", path.display());
+                    }
+                    return None;
                 }
-                Err(err) => {
-                    eprintln!("Failed to read metadata from {}: {}", path.display(), err);
-                    None
+
+                if verbose {
+                    eprintln!(
+                        "Indexed '{}' - '{}' ({})",
+                        artist_variants.first().unwrap_or(&"?".to_string()),
+                        title_variants.first().unwrap_or(&"?".to_string()),
+                        path.display()
+                    );
                 }
+
+                Some(LibraryTrack {
+                    path: path.clone(),
+                    artist_variants,
+                    title_variants,
+                })
+            }
+            Err(err) => {
+                eprintln!("Failed to read metadata from {}: {}", path.display(), err);
+                None
             }
         })
         .collect();
@@ -434,7 +433,8 @@ fn build_library_index(
 fn url_encode(s: &str) -> String {
     s.chars()
         .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' || c == '/' {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' || c == '/'
+            {
                 c.to_string()
             } else {
                 // URL encode the character
@@ -517,7 +517,10 @@ fn write_m3u(paths: &[PathBuf], output: &Path) -> Result<()> {
         })
         .collect();
 
-    logger::success(&format!("Extracted metadata for {} tracks", playlist_tracks.len()));
+    logger::success(&format!(
+        "Extracted metadata for {} tracks",
+        playlist_tracks.len()
+    ));
 
     // Write all tracks to the file
     let mut file = File::create(output)
@@ -622,9 +625,24 @@ fn expand_title_variants(raw_title: &str, artist_keys: &[String]) -> Vec<String>
     if let Some(last_dash) = working_raw.rfind(" - ") {
         let after_dash = working_raw[last_dash + 3..].to_lowercase();
         let suspicious_keywords = [
-            "remaster", "remix", "edit", "version", "live", "acoustic",
-            "radio", "album", "single", "vocal", "instrumental", "feat",
-            "ft", "featuring", "with", "explicit", "clean", "demo"
+            "remaster",
+            "remix",
+            "edit",
+            "version",
+            "live",
+            "acoustic",
+            "radio",
+            "album",
+            "single",
+            "vocal",
+            "instrumental",
+            "feat",
+            "ft",
+            "featuring",
+            "with",
+            "explicit",
+            "clean",
+            "demo",
         ];
 
         if suspicious_keywords.iter().any(|kw| after_dash.contains(kw)) {
@@ -854,7 +872,10 @@ fn prompt_user_choice(max_choice: usize) -> Result<usize> {
         match input.trim().parse::<usize>() {
             Ok(choice) if choice <= max_choice => return Ok(choice),
             _ => {
-                println!("Invalid choice. Please enter a number between 0 and {}.", max_choice);
+                println!(
+                    "Invalid choice. Please enter a number between 0 and {}.",
+                    max_choice
+                );
             }
         }
     }

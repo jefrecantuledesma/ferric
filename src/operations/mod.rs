@@ -1,5 +1,6 @@
 pub mod convert;
 pub mod dedupe;
+pub mod dedupe_libraries;
 pub mod fix_metadata;
 pub mod fix_naming;
 pub mod merge;

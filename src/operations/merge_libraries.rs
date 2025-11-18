@@ -42,7 +42,10 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
     for (i, dir) in options.input_dirs.iter().enumerate() {
         logger::info(&format!("  Library {}: {}", i + 1, dir.display()));
     }
-    logger::info(&format!("Output directory: {}", options.output_dir.display()));
+    logger::info(&format!(
+        "Output directory: {}",
+        options.output_dir.display()
+    ));
     logger::info("Creating symlinks to highest quality versions");
 
     if options.dry_run {
@@ -59,7 +62,9 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
     let scan_pb = ProgressBar::new(options.input_dirs.len() as u64);
     scan_pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} libraries | Scanning in parallel...")
+            .template(
+                "[{elapsed_precise}] [{bar:40}] {pos}/{len} libraries | Scanning in parallel...",
+            )
             .unwrap()
             .progress_chars("█▓▒░"),
     );
@@ -306,7 +311,10 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
                 // If it already points to the same file, skip
                 if existing_target == source_path {
                     logger::debug(
-                        &format!("Symlink already points to correct file: {}", dest_path.display()),
+                        &format!(
+                            "Symlink already points to correct file: {}",
+                            dest_path.display()
+                        ),
                         options.verbose,
                     );
                     let mut stats = stats_mutex.lock().unwrap();
@@ -315,23 +323,26 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
                 }
 
                 // Get quality of existing target
-                let existing_quality = if let Ok(existing_meta) = AudioMetadata::from_file(&existing_target) {
-                    quality::calculate_quality_score(&existing_meta, &options.config)
-                } else {
-                    // If we can't read the existing file, assume we should replace it
-                    logger::warning(&format!(
-                        "Cannot read existing symlink target {}, will replace",
-                        existing_target.display()
-                    ));
-                    0
-                };
+                let existing_quality =
+                    if let Ok(existing_meta) = AudioMetadata::from_file(&existing_target) {
+                        quality::calculate_quality_score(&existing_meta, &options.config)
+                    } else {
+                        // If we can't read the existing file, assume we should replace it
+                        logger::warning(&format!(
+                            "Cannot read existing symlink target {}, will replace",
+                            existing_target.display()
+                        ));
+                        0
+                    };
 
                 if new_quality > existing_quality {
                     // Upgrade!
                     logger::debug(
                         &format!(
                             "Upgrading symlink (quality {} > {}): {}",
-                            new_quality, existing_quality, dest_path.display()
+                            new_quality,
+                            existing_quality,
+                            dest_path.display()
                         ),
                         options.verbose,
                     );
@@ -373,7 +384,8 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
                     logger::debug(
                         &format!(
                             "Skipping (same quality {}): {}",
-                            new_quality, dest_path.display()
+                            new_quality,
+                            dest_path.display()
                         ),
                         options.verbose,
                     );
@@ -386,7 +398,9 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
                     logger::debug(
                         &format!(
                             "Skipping (lower quality {} < {}): {}",
-                            new_quality, existing_quality, dest_path.display()
+                            new_quality,
+                            existing_quality,
+                            dest_path.display()
                         ),
                         options.verbose,
                     );
@@ -411,7 +425,11 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
         } else {
             // Destination doesn't exist - create new symlink
             logger::debug(
-                &format!("Creating symlink: {} -> {}", dest_path.display(), source_path.display()),
+                &format!(
+                    "Creating symlink: {} -> {}",
+                    dest_path.display(),
+                    source_path.display()
+                ),
                 options.verbose,
             );
 

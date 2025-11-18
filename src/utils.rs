@@ -31,6 +31,10 @@ pub fn sanitize(s: &str) -> String {
         })
         .collect();
 
+    // Trim trailing periods and spaces (filesystem compatibility)
+    // Some filesystems don't allow directories ending with periods
+    result = result.trim_end_matches('.').trim_end().to_string();
+
     // Return default if empty
     if result.is_empty() {
         "_unknown".to_string()
@@ -60,16 +64,17 @@ pub fn normalize_for_comparison(s: &str) -> String {
     result = result.replace("&", "and");
 
     // Remove common apostrophe patterns (but keep the letter before)
-    result = result.replace("'s ", " ");      // possessive
-    result = result.replace("'t ", "t ");     // can't → cant
-    result = result.replace("'re ", "re ");   // you're → youre
-    result = result.replace("'ve ", "ve ");   // I've → ive
-    result = result.replace("'ll ", "ll ");   // I'll → ill
-    result = result.replace("'d ", "d ");     // I'd → id
-    result = result.replace("'m ", "m ");     // I'm → im
+    result = result.replace("'s ", " "); // possessive
+    result = result.replace("'t ", "t "); // can't → cant
+    result = result.replace("'re ", "re "); // you're → youre
+    result = result.replace("'ve ", "ve "); // I've → ive
+    result = result.replace("'ll ", "ll "); // I'll → ill
+    result = result.replace("'d ", "d "); // I'd → id
+    result = result.replace("'m ", "m "); // I'm → im
 
     // Handle remaining apostrophes at word boundaries
-    result = result.chars()
+    result = result
+        .chars()
         .map(|c| {
             if c.is_alphanumeric() || c.is_whitespace() {
                 c
@@ -80,9 +85,7 @@ pub fn normalize_for_comparison(s: &str) -> String {
         .collect::<String>();
 
     // Collapse whitespace and trim
-    result.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Generate unique path by appending (n) if file exists
@@ -190,6 +193,9 @@ mod tests {
         assert_eq!(sanitize("Test\\Path"), "Test-Path");
         assert_eq!(sanitize("  Multiple   Spaces  "), "Multiple Spaces");
         assert_eq!(sanitize(""), "_unknown");
+        assert_eq!(sanitize("Cyclo."), "Cyclo"); // Trailing period
+        assert_eq!(sanitize("Name..."), "Name"); // Multiple trailing periods
+        assert_eq!(sanitize("Artist. "), "Artist"); // Period and space
     }
 
     #[test]

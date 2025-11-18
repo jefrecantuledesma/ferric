@@ -126,7 +126,9 @@ fn fix_directories(
     let pb = ProgressBar::new(dirs.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) | Fixing directory names...")
+            .template(
+                "[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) | Fixing directory names...",
+            )
             .unwrap()
             .progress_chars("█▓▒░"),
     );

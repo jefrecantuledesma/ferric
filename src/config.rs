@@ -30,6 +30,10 @@ pub struct GeneralConfig {
     /// Default log file directory
     #[serde(default)]
     pub log_dir: Option<PathBuf>,
+
+    /// Metadata cache database path
+    #[serde(default = "default_cache_path")]
+    pub cache_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +128,13 @@ fn default_threads() -> usize {
     0 // 0 means auto-detect
 }
 
+fn default_cache_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".ferric")
+        .join("metadata_cache.db")
+}
+
 fn default_output_format() -> String {
     "opus".to_string()
 }
@@ -196,6 +207,7 @@ impl Default for GeneralConfig {
             threads: default_threads(),
             verbose: false,
             log_dir: None,
+            cache_path: default_cache_path(),
         }
     }
 }

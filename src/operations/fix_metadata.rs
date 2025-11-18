@@ -33,13 +33,7 @@ struct FileMetadataInfo {
 /// Check if a file has an embedded album cover
 fn has_album_cover(path: &Path) -> Result<bool> {
     let output = Command::new("ffprobe")
-        .args(&[
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_streams",
-        ])
+        .args(&["-v", "quiet", "-print_format", "json", "-show_streams"])
         .arg(path)
         .output()
         .context("Failed to run ffprobe")?;
@@ -122,8 +116,7 @@ fn prompt_for_file(prompt: &str) -> Result<PathBuf> {
 /// Reference: https://wiki.xiph.org/VorbisComment#Cover_art
 fn create_metadata_block_picture(cover_path: &Path) -> Result<String> {
     // Read the image file
-    let image_data = fs::read(cover_path)
-        .context("Failed to read cover image")?;
+    let image_data = fs::read(cover_path).context("Failed to read cover image")?;
 
     // Determine MIME type from extension
     let mime_type = match utils::get_extension(cover_path).as_deref() {
@@ -134,11 +127,7 @@ fn create_metadata_block_picture(cover_path: &Path) -> Result<String> {
 
     // Get image dimensions using ffprobe
     let probe_output = Command::new("ffprobe")
-        .args(&[
-            "-v", "quiet",
-            "-print_format", "json",
-            "-show_streams",
-        ])
+        .args(&["-v", "quiet", "-print_format", "json", "-show_streams"])
         .arg(cover_path)
         .output()
         .context("Failed to run ffprobe on cover image")?;
@@ -164,7 +153,7 @@ fn create_metadata_block_picture(cover_path: &Path) -> Result<String> {
     picture_data.extend_from_slice(&width.to_be_bytes());
     picture_data.extend_from_slice(&height.to_be_bytes());
     picture_data.extend_from_slice(&24u32.to_be_bytes()); // 24-bit color depth
-    picture_data.extend_from_slice(&0u32.to_be_bytes());  // 0 for non-indexed
+    picture_data.extend_from_slice(&0u32.to_be_bytes()); // 0 for non-indexed
 
     // Image data length and data
     picture_data.extend_from_slice(&(image_data.len() as u32).to_be_bytes());
@@ -244,7 +233,12 @@ fn embed_cover(audio_path: &Path, cover_path: &Path, dry_run: bool) -> Result<()
 }
 
 /// Update text metadata using ffmpeg
-fn update_metadata(audio_path: &Path, artist: Option<&str>, album: Option<&str>, dry_run: bool) -> Result<()> {
+fn update_metadata(
+    audio_path: &Path,
+    artist: Option<&str>,
+    album: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
     if dry_run {
         return Ok(());
     }
@@ -387,7 +381,10 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
 
     pb.finish_with_message("Analysis complete");
 
-    let file_info_list = Arc::try_unwrap(file_info_list).unwrap().into_inner().unwrap();
+    let file_info_list = Arc::try_unwrap(file_info_list)
+        .unwrap()
+        .into_inner()
+        .unwrap();
 
     if file_info_list.is_empty() {
         logger::success("No missing metadata found!");
@@ -409,7 +406,10 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
             if !info.has_cover {
                 let artist = info.metadata.get_organizing_artist(false);
                 let album = info.metadata.get_album();
-                albums.entry((artist, album)).or_insert_with(Vec::new).push(info.clone());
+                albums
+                    .entry((artist, album))
+                    .or_insert_with(Vec::new)
+                    .push(info.clone());
             }
         }
 
@@ -421,17 +421,27 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
             logger::info(&format!("  Files: {} tracks", album_files.len()));
             logger::info("  Example files:");
             for file in album_files.iter().take(3) {
-                logger::info(&format!("    - {}", file.path.file_name().unwrap().to_string_lossy()));
+                logger::info(&format!(
+                    "    - {}",
+                    file.path.file_name().unwrap().to_string_lossy()
+                ));
             }
 
             // Prompt for cover
             logger::info("\nEnter path to album cover (jpg/png), or press Enter to skip:");
             match prompt_for_file("Cover path: ") {
                 Ok(cover_path) => {
-                    logger::info(&format!("Embedding cover into {} files...", album_files.len()));
+                    logger::info(&format!(
+                        "Embedding cover into {} files...",
+                        album_files.len()
+                    ));
 
                     if options.dry_run {
-                        logger::info(&format!("Would embed {} into {} files", cover_path.display(), album_files.len()));
+                        logger::info(&format!(
+                            "Would embed {} into {} files",
+                            cover_path.display(),
+                            album_files.len()
+                        ));
                     } else {
                         let pb = ProgressBar::new(album_files.len() as u64);
                         pb.set_style(
@@ -452,7 +462,11 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
                                 Err(e) => {
                                     *error_count.lock().unwrap() += 1;
                                     if options.verbose {
-                                        logger::error(&format!("  ✗ {}: {}", info.path.display(), e));
+                                        logger::error(&format!(
+                                            "  ✗ {}: {}",
+                                            info.path.display(),
+                                            e
+                                        ));
                                     }
                                 }
                             }
@@ -464,7 +478,11 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
                         let success = *success_count.lock().unwrap();
                         let errors = *error_count.lock().unwrap();
 
-                        logger::success(&format!("✓ Embedded cover in {}/{} files", success, album_files.len()));
+                        logger::success(&format!(
+                            "✓ Embedded cover in {}/{} files",
+                            success,
+                            album_files.len()
+                        ));
                         if errors > 0 {
                             logger::warning(&format!("✗ Failed: {} files", errors));
                         }
@@ -488,11 +506,17 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
             let missing_album = options.check_album && info.metadata.album.is_none();
 
             if missing_artist || missing_album {
-                folders.entry(info.parent_dir.clone()).or_insert_with(Vec::new).push(info.clone());
+                folders
+                    .entry(info.parent_dir.clone())
+                    .or_insert_with(Vec::new)
+                    .push(info.clone());
             }
         }
 
-        logger::info(&format!("Found {} folders with missing artist/album metadata", folders.len()));
+        logger::info(&format!(
+            "Found {} folders with missing artist/album metadata",
+            folders.len()
+        ));
 
         for (folder, folder_files) in folders.iter() {
             logger::info("\n----------------------------------------");
@@ -500,8 +524,14 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
             logger::info(&format!("  Files: {} tracks", folder_files.len()));
 
             // Show what's missing
-            let missing_artist_count = folder_files.iter().filter(|f| f.metadata.artist.is_none()).count();
-            let missing_album_count = folder_files.iter().filter(|f| f.metadata.album.is_none()).count();
+            let missing_artist_count = folder_files
+                .iter()
+                .filter(|f| f.metadata.artist.is_none())
+                .count();
+            let missing_album_count = folder_files
+                .iter()
+                .filter(|f| f.metadata.album.is_none())
+                .count();
 
             if missing_artist_count > 0 {
                 logger::warning(&format!("  Missing artist: {} files", missing_artist_count));
@@ -512,7 +542,10 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
 
             logger::info("  Example files:");
             for file in folder_files.iter().take(3) {
-                logger::info(&format!("    - {}", file.path.file_name().unwrap().to_string_lossy()));
+                logger::info(&format!(
+                    "    - {}",
+                    file.path.file_name().unwrap().to_string_lossy()
+                ));
             }
 
             let mut new_artist = None;
@@ -520,7 +553,9 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
 
             if missing_artist_count > 0 && options.check_artist {
                 logger::info("");
-                match prompt_for_text("Enter artist name for this folder (or press Enter to skip): ") {
+                match prompt_for_text(
+                    "Enter artist name for this folder (or press Enter to skip): ",
+                ) {
                     Ok(input) if !input.is_empty() => {
                         new_artist = Some(input);
                     }
@@ -532,7 +567,8 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
 
             if missing_album_count > 0 && options.check_album {
                 logger::info("");
-                match prompt_for_text("Enter album name for this folder (or press Enter to skip): ") {
+                match prompt_for_text("Enter album name for this folder (or press Enter to skip): ")
+                {
                     Ok(input) if !input.is_empty() => {
                         new_album = Some(input);
                     }
@@ -544,7 +580,10 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
 
             // Update metadata if anything was provided
             if new_artist.is_some() || new_album.is_some() {
-                logger::info(&format!("Updating metadata for {} files...", folder_files.len()));
+                logger::info(&format!(
+                    "Updating metadata for {} files...",
+                    folder_files.len()
+                ));
 
                 if options.dry_run {
                     logger::info("Would update metadata:");
@@ -570,10 +609,11 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
                     let album_ref = new_album.as_deref();
 
                     // Filter files that need updates
-                    let files_to_update: Vec<_> = folder_files.iter()
+                    let files_to_update: Vec<_> = folder_files
+                        .iter()
                         .filter(|f| {
-                            (artist_ref.is_some() && f.metadata.artist.is_none()) ||
-                            (album_ref.is_some() && f.metadata.album.is_none())
+                            (artist_ref.is_some() && f.metadata.artist.is_none())
+                                || (album_ref.is_some() && f.metadata.album.is_none())
                         })
                         .collect();
 

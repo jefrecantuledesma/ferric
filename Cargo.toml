@@ -57,6 +57,9 @@ base64 = "0.22"
 # Relative path computation for playlists
 pathdiff = "0.2"
 
+# Metadata cache database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
 [dev-dependencies]
 tempfile = "3.10"
 assert_cmd = "2.0"

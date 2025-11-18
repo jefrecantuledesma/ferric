@@ -140,7 +140,10 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
             .filter(|p| utils::is_audio_file(p))
             .collect();
 
-        logger::info(&format!("Indexing {} existing files...", existing_files.len()));
+        logger::info(&format!(
+            "Indexing {} existing files...",
+            existing_files.len()
+        ));
 
         let index_pb = ProgressBar::new(existing_files.len() as u64);
         index_pb.set_style(
@@ -201,7 +204,9 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
         let title_normalized = &file_info.title_normalized;
 
         // O(1) lookup in the index instead of O(n) directory scan!
-        let artist = file_info.metadata.get_organizing_artist(options.config.naming.prefer_artist);
+        let artist = file_info
+            .metadata
+            .get_organizing_artist(options.config.naming.prefer_artist);
         let album = file_info.metadata.get_album();
         let artist_safe = utils::clamp_component(
             &utils::sanitize(&artist),

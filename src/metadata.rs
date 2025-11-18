@@ -1,4 +1,6 @@
+use crate::{cache, logger};
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::path::Path;
 use std::process::Command;
@@ -7,7 +9,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AudioMetadata {
     pub artist: Option<String>,
     pub album: Option<String>,
@@ -26,8 +28,33 @@ pub struct AudioMetadata {
 impl AudioMetadata {
     /// Extract metadata from an audio file using ffprobe (more reliable for MP3s)
     pub fn from_file(path: &Path) -> Result<Self> {
+        if let Some(cache) = cache::get_global_cache() {
+            match cache.get(path) {
+                Ok(Some(metadata)) => return Ok(metadata),
+                Ok(None) => {}
+                Err(err) => logger::warning(&format!(
+                    "Metadata cache lookup failed for {}: {}",
+                    path.display(),
+                    err
+                )),
+            }
+        }
+
         // Use ffprobe for better MP3/ID3 tag support
-        Self::from_file_ffprobe(path).or_else(|_| Self::from_file_symphonia(path))
+        let metadata =
+            Self::from_file_ffprobe(path).or_else(|_| Self::from_file_symphonia(path))?;
+
+        if let Some(cache) = cache::get_global_cache() {
+            if let Err(err) = cache.insert(path, &metadata) {
+                logger::warning(&format!(
+                    "Failed to store metadata for {} in cache: {}",
+                    path.display(),
+                    err
+                ));
+            }
+        }
+
+        Ok(metadata)
     }
 
     /// Extract metadata using ffprobe (fallback method, more reliable)

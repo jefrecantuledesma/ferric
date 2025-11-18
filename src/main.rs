@@ -1,7 +1,7 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
-use ferric::config::Config;
 use ferric::operations::*;
+use ferric::{cache, config::Config};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -24,6 +24,10 @@ struct Cli {
     /// Custom log file path (default: ~/.ferric/logs/ferric_TIMESTAMP.log)
     #[arg(long, global = true)]
     log_file: Option<PathBuf>,
+
+    /// Metadata cache database path (default: ~/.ferric/metadata_cache.db)
+    #[arg(long, global = true)]
+    database: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -82,13 +86,20 @@ enum Commands {
 
     /// Merge multiple libraries using symlinks, keeping highest quality versions
     MergeLibraries {
-        /// Input library directories to merge (specify multiple times)
-        #[arg(short, long, num_args = 1..)]
+        /// Input library directories to merge
+        #[arg(short, long, num_args = 2..)]
         input: Vec<PathBuf>,
 
         /// Output directory for merged library
         #[arg(short, long)]
         output: PathBuf,
+    },
+
+    /// Deduplicate files across multiple libraries by replacing lower quality with symlinks
+    DedupeLibraries {
+        /// Input library directories to scan
+        #[arg(short, long, num_args = 2..)]
+        input: Vec<PathBuf>,
     },
 
     /// Fix naming issues (apostrophes, case, whitespace)
@@ -180,21 +191,35 @@ enum Commands {
         #[arg(long)]
         auto_select: bool,
     },
+
+    /// Remove entries from the metadata cache that point to missing or changed files
+    DatabaseClean,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Load configuration
-    let config = if let Some(config_path) = cli.config {
+    let mut config = if let Some(config_path) = cli.config {
         Config::from_file(&config_path)?
     } else {
         Config::load_or_default()
     };
 
+    if let Some(database_path) = cli.database {
+        config.general.cache_path = database_path;
+    }
+
     // Initialize logging
     let log_path = ferric::logger::init_logger(cli.log_file)?;
     ferric::logger::info(&format!("Log file: {}", log_path.display()));
+
+    // Initialize metadata cache database
+    cache::init_global_cache(&config.general.cache_path)?;
+    ferric::logger::info(&format!(
+        "Metadata cache: {}",
+        config.general.cache_path.display()
+    ));
 
     // Execute command
     let result = match cli.command {
@@ -259,6 +284,16 @@ fn main() -> Result<()> {
                 config,
             };
             merge_libraries::run(opts).map(|_| ())
+        }
+
+        Commands::DedupeLibraries { input } => {
+            let opts = dedupe_libraries::DedupeLibrariesOptions {
+                input_dirs: input,
+                dry_run: cli.dry_run,
+                verbose: cli.verbose,
+                config,
+            };
+            dedupe_libraries::run(opts).map(|_| ())
         }
 
         Commands::FixNaming { input } => {
@@ -345,6 +380,14 @@ fn main() -> Result<()> {
                 verbose: cli.verbose,
             };
             playlist::run(opts)
+        }
+
+        Commands::DatabaseClean => {
+            let cache = cache::get_global_cache()
+                .ok_or_else(|| anyhow!("Metadata cache is not initialized"))?;
+            let stats = cache.clean_stale_entries()?;
+            stats.print();
+            Ok(())
         }
     };
 
