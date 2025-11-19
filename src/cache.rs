@@ -368,7 +368,7 @@ impl MetadataCache {
         let misses = cache_misses.load(std::sync::atomic::Ordering::Relaxed);
         let errs = errors.load(std::sync::atomic::Ordering::Relaxed);
 
-        logger::success(&format!("\nCache initialization complete!"));
+        logger::success("\nCache initialization complete!");
         logger::info(&format!("  Total files: {}", total_files));
         logger::info(&format!("  Already cached: {}", hits));
         logger::info(&format!("  Newly cached: {}", misses));
@@ -376,9 +376,24 @@ impl MetadataCache {
             logger::warning(&format!("  Errors: {}", errs));
         }
 
-        // Show final cache stats
-        if let Ok(stats) = self.stats() {
-            stats.print();
+        // Give SQLite a moment to finish any pending WAL checkpoints from parallel writes
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Force WAL checkpoint to ensure all writes are committed
+        {
+            let conn = self.connection.lock().unwrap();
+            let _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)", []);
+        }
+
+        // Show final cache stats (with timeout protection)
+        match self.stats() {
+            Ok(stats) => {
+                logger::info("");  // Blank line for spacing
+                stats.print();
+            }
+            Err(e) => {
+                logger::warning(&format!("Could not query cache stats: {}", e));
+            }
         }
 
         Ok(())
