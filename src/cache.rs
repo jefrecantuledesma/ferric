@@ -384,15 +384,6 @@ impl MetadataCache {
             logger::warning(&format!("  Errors: {}", errs));
         }
 
-        // Try to show cache stats, but don't block if there's contention
-        // (After massive parallel writes, the connection might be busy)
-        logger::info("");
-        if let Ok(stats) = self.stats() {
-            stats.print();
-        } else {
-            logger::info("(Cache stats temporarily unavailable - run 'database-clean' to see stats)");
-        }
-
         Ok(())
     }
 }
