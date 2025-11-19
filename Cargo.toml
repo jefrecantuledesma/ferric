@@ -9,6 +9,7 @@ license = "MIT"
 [dependencies]
 # CLI framework
 clap = { version = "4.5", features = ["derive", "cargo"] }
+clap_complete = "4.5"
 
 # Audio metadata extraction (pure Rust!)
 symphonia = { version = "0.5", features = ["all"] }

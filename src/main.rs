@@ -54,49 +54,36 @@ enum Commands {
         delete_original: bool,
     },
 
-    /// Sort files by metadata into Artist/Album folder structure
-    Sort {
+    /// Generate shell completion scripts for bash, zsh, fish, etc.
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+
+    /// Remove entries from the metadata cache that point to missing or changed files
+    DatabaseClean,
+
+    /// Initialize/warm up the metadata cache by scanning directories
+    DatabaseInit {
+        /// Input directories to scan (can specify multiple)
+        #[arg(short, long, required = true)]
+        input: Vec<PathBuf>,
+
+        /// Skip generating audio fingerprints (faster but disables MusicBrainz lookups)
+        #[arg(long)]
+        without_fingerprints: bool,
+    },
+
+    /// Find and remove duplicate files based on metadata
+    Dedupe {
         /// Input directory to scan
         #[arg(short, long)]
         input: PathBuf,
 
-        /// Output library directory (defaults to input directory for in-place sorting)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        /// Move files instead of copying
+        /// Automatically remove duplicates without confirmation
         #[arg(long)]
-        r#move: bool,
-
-        /// Fix naming (normalize apostrophes, whitespace, etc.) while sorting
-        #[arg(long)]
-        fix_naming: bool,
-    },
-
-    /// Merge an organized library into another, upgrading with better quality
-    Merge {
-        /// Source library directory to merge from
-        #[arg(short, long)]
-        input: PathBuf,
-
-        /// Target library directory to merge into
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// Move files instead of copying
-        #[arg(long)]
-        r#move: bool,
-    },
-
-    /// Merge multiple libraries using symlinks, keeping highest quality versions
-    MergeLibraries {
-        /// Input library directories to merge
-        #[arg(short, long, num_args = 2..)]
-        input: Vec<PathBuf>,
-
-        /// Output directory for merged library
-        #[arg(short, long)]
-        output: PathBuf,
+        auto_remove: bool,
     },
 
     /// Deduplicate files across multiple libraries by replacing lower quality with symlinks
@@ -104,13 +91,6 @@ enum Commands {
         /// Input library directories to scan
         #[arg(short, long, num_args = 2..)]
         input: Vec<PathBuf>,
-    },
-
-    /// Fix naming issues (apostrophes, case, whitespace)
-    FixNaming {
-        /// Directory to process
-        #[arg(short, long)]
-        input: PathBuf,
     },
 
     /// Fix metadata using MusicBrainz (recommended!)
@@ -180,17 +160,6 @@ enum Commands {
         overwrite: bool,
     },
 
-    /// Find and remove duplicate files based on metadata
-    Dedupe {
-        /// Input directory to scan
-        #[arg(short, long)]
-        input: PathBuf,
-
-        /// Automatically remove duplicates without confirmation
-        #[arg(long)]
-        auto_remove: bool,
-    },
-
     /// Fix missing metadata manually (legacy mode - use 'fix-metadata' for MusicBrainz instead)
     FixMetadataManual {
         /// Directory to process
@@ -208,6 +177,88 @@ enum Commands {
         /// Check for missing album cover
         #[arg(long)]
         cover: bool,
+
+        /// Check for missing genre
+        #[arg(long)]
+        genre: bool,
+    },
+
+    /// Fix naming issues (apostrophes, case, whitespace)
+    FixNaming {
+        /// Directory to process
+        #[arg(short, long)]
+        input: PathBuf,
+    },
+
+    /// Generate example config file
+    GenConfig {
+        /// Output path for config file
+        #[arg(short, long, default_value = "ferric.toml")]
+        output: PathBuf,
+    },
+
+    /// Merge an organized library into another, upgrading with better quality
+    Merge {
+        /// Source library directory to merge from
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Target library directory to merge into
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Move files instead of copying
+        #[arg(long)]
+        r#move: bool,
+    },
+
+    /// Merge multiple libraries using symlinks, keeping highest quality versions
+    MergeLibraries {
+        /// Input library directories to merge
+        #[arg(short, long, num_args = 2..)]
+        input: Vec<PathBuf>,
+
+        /// Output directory for merged library
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
+    /// Build an .m3u playlist from an Exportify CSV and local library
+    PlaylistImport {
+        /// Path to Exportify CSV file
+        #[arg(short, long)]
+        playlist: PathBuf,
+
+        /// Library root to search for audio files
+        #[arg(short, long)]
+        library: PathBuf,
+
+        /// Playlist folder where .m3u files will be stored (required for relative path calculation)
+        #[arg(short = 'f', long)]
+        playlist_folder: PathBuf,
+
+        /// Automatically select the best match instead of prompting for conflicts
+        #[arg(long)]
+        auto_select: bool,
+    },
+
+    /// Sort files by metadata into Artist/Album folder structure
+    Sort {
+        /// Input directory to scan
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output library directory (defaults to input directory for in-place sorting)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Move files instead of copying
+        #[arg(long)]
+        r#move: bool,
+
+        /// Fix naming (normalize apostrophes, whitespace, etc.) while sorting
+        #[arg(long)]
+        fix_naming: bool,
     },
 
     /// Run unified pipeline: sort -> optional convert -> fix naming
@@ -235,46 +286,6 @@ enum Commands {
         /// Convert higher quality down (e.g., FLAC to lossy to save space, requires --format)
         #[arg(long)]
         convert_down: bool,
-    },
-
-    /// Generate example config file
-    GenConfig {
-        /// Output path for config file
-        #[arg(short, long, default_value = "ferric.toml")]
-        output: PathBuf,
-    },
-
-    /// Build an .m3u playlist from an Exportify CSV and local library
-    PlaylistImport {
-        /// Path to Exportify CSV file
-        #[arg(short, long)]
-        playlist: PathBuf,
-
-        /// Library root to search for audio files
-        #[arg(short, long)]
-        library: PathBuf,
-
-        /// Playlist folder where .m3u files will be stored (required for relative path calculation)
-        #[arg(short = 'f', long)]
-        playlist_folder: PathBuf,
-
-        /// Automatically select the best match instead of prompting for conflicts
-        #[arg(long)]
-        auto_select: bool,
-    },
-
-    /// Remove entries from the metadata cache that point to missing or changed files
-    DatabaseClean,
-
-    /// Initialize/warm up the metadata cache by scanning directories
-    DatabaseInit {
-        /// Input directories to scan (can specify multiple)
-        #[arg(short, long, required = true)]
-        input: Vec<PathBuf>,
-
-        /// Skip generating audio fingerprints (faster but disables MusicBrainz lookups)
-        #[arg(long)]
-        without_fingerprints: bool,
     },
 }
 
@@ -324,6 +335,14 @@ async fn main() -> Result<()> {
                 config,
             };
             convert::run(opts).map(|_| ())
+        }
+
+        Commands::Completions { shell } => {
+            use clap::CommandFactory;
+            let mut cmd = Cli::command();
+            let name = cmd.get_name().to_string();
+            clap_complete::generate(shell, &mut cmd, name, &mut std::io::stdout());
+            Ok(())
         }
 
         Commands::Sort {
@@ -451,12 +470,14 @@ async fn main() -> Result<()> {
             artist,
             album,
             cover,
+            genre,
         } => {
             let opts = fix_metadata::FixMetadataOptions {
                 input_dir: input,
                 check_artist: artist,
                 check_album: album,
                 check_cover: cover,
+                check_genre: genre,
                 dry_run: cli.dry_run,
                 verbose: cli.verbose,
             };

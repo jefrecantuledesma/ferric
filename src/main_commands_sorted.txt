@@ -1,0 +1,248 @@
+#[derive(Subcommand)]
+enum Commands {
+    /// Convert audio files to specified format
+    Convert {
+        /// Input directory to scan
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output directory for converted files
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Output format (opus, aac, mp3, vorbis)
+        #[arg(short, long)]
+        format: Option<String>,
+
+        /// Delete original files after successful conversion
+        #[arg(long)]
+        delete_original: bool,
+    },
+
+    /// Remove entries from the metadata cache that point to missing or changed files
+    DatabaseClean,
+
+    /// Initialize/warm up the metadata cache by scanning directories
+    DatabaseInit {
+        /// Input directories to scan (can specify multiple)
+        #[arg(short, long, required = true)]
+        input: Vec<PathBuf>,
+
+        /// Skip generating audio fingerprints (faster but disables MusicBrainz lookups)
+        #[arg(long)]
+        without_fingerprints: bool,
+    },
+
+    /// Find and remove duplicate files based on metadata
+    Dedupe {
+        /// Input directory to scan
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Automatically remove duplicates without confirmation
+        #[arg(long)]
+        auto_remove: bool,
+    },
+
+    /// Deduplicate files across multiple libraries by replacing lower quality with symlinks
+    DedupeLibraries {
+        /// Input library directories to scan
+        #[arg(short, long, num_args = 2..)]
+        input: Vec<PathBuf>,
+    },
+
+    /// Fix metadata using MusicBrainz (recommended!)
+    FixMetadata {
+        /// Directories to process (can specify multiple)
+        #[arg(short, long, num_args = 1..)]
+        input: Vec<PathBuf>,
+
+        /// Fix artist field
+        #[arg(long)]
+        artist: bool,
+
+        /// Fix album field
+        #[arg(long)]
+        album: bool,
+
+        /// Fix album artist field
+        #[arg(long)]
+        album_artist: bool,
+
+        /// Fix title field
+        #[arg(long)]
+        title: bool,
+
+        /// Fix date/year field
+        #[arg(long)]
+        date: bool,
+
+        /// Fix genre field
+        #[arg(long)]
+        genre: bool,
+
+        /// Fix all fields (default if no specific fields specified)
+        #[arg(long)]
+        all: bool,
+
+        /// Use MusicBrainz for lookups (default: true)
+        #[arg(long, default_value_t = true)]
+        use_musicbrainz: bool,
+
+        /// Minimum confidence threshold (0.0-1.0) for auto-apply
+        #[arg(long)]
+        confidence_threshold: Option<f32>,
+
+        /// Always prompt even for high confidence matches
+        #[arg(long)]
+        interactive: bool,
+
+        /// Auto-apply high confidence matches without prompting
+        #[arg(long)]
+        auto_apply: bool,
+
+        /// Skip fingerprinting, use metadata search only
+        #[arg(long)]
+        skip_fingerprinting: bool,
+
+        /// Avoid setting album artist to "Various Artists"
+        #[arg(long, default_value_t = true)]
+        avoid_various_artists: bool,
+
+        /// Allow "Various Artists" (disable the avoidance)
+        #[arg(long)]
+        no_avoid_various_artists: bool,
+
+        /// Overwrite existing metadata (default: false, additive-only)
+        #[arg(long)]
+        overwrite: bool,
+    },
+
+    /// Fix missing metadata manually (legacy mode - use 'fix-metadata' for MusicBrainz instead)
+    FixMetadataManual {
+        /// Directory to process
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Check for missing artist
+        #[arg(long)]
+        artist: bool,
+
+        /// Check for missing album
+        #[arg(long)]
+        album: bool,
+
+        /// Check for missing album cover
+        #[arg(long)]
+        cover: bool,
+
+        /// Check for missing genre
+        #[arg(long)]
+        genre: bool,
+    },
+
+    /// Fix naming issues (apostrophes, case, whitespace)
+    FixNaming {
+        /// Directory to process
+        #[arg(short, long)]
+        input: PathBuf,
+    },
+
+    /// Generate example config file
+    GenConfig {
+        /// Output path for config file
+        #[arg(short, long, default_value = "ferric.toml")]
+        output: PathBuf,
+    },
+
+    /// Merge an organized library into another, upgrading with better quality
+    Merge {
+        /// Source library directory to merge from
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Target library directory to merge into
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Move files instead of copying
+        #[arg(long)]
+        r#move: bool,
+    },
+
+    /// Merge multiple libraries using symlinks, keeping highest quality versions
+    MergeLibraries {
+        /// Input library directories to merge
+        #[arg(short, long, num_args = 2..)]
+        input: Vec<PathBuf>,
+
+        /// Output directory for merged library
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
+    /// Build an .m3u playlist from an Exportify CSV and local library
+    PlaylistImport {
+        /// Path to Exportify CSV file
+        #[arg(short, long)]
+        playlist: PathBuf,
+
+        /// Library root to search for audio files
+        #[arg(short, long)]
+        library: PathBuf,
+
+        /// Playlist folder where .m3u files will be stored (required for relative path calculation)
+        #[arg(short = 'f', long)]
+        playlist_folder: PathBuf,
+
+        /// Automatically select the best match instead of prompting for conflicts
+        #[arg(long)]
+        auto_select: bool,
+    },
+
+    /// Sort files by metadata into Artist/Album folder structure
+    Sort {
+        /// Input directory to scan
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output library directory (defaults to input directory for in-place sorting)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Move files instead of copying
+        #[arg(long)]
+        r#move: bool,
+
+        /// Fix naming (normalize apostrophes, whitespace, etc.) while sorting
+        #[arg(long)]
+        fix_naming: bool,
+    },
+
+    /// Run unified pipeline: sort -> optional convert -> fix naming
+    Unified {
+        /// Input directory to scan
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output library directory
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Convert to specified format after sorting (opus, aac, mp3, vorbis)
+        #[arg(short, long)]
+        format: Option<String>,
+
+        /// Delete original files after conversion (requires --format)
+        #[arg(long)]
+        destructive: bool,
+
+        /// Always convert regardless of quality (requires --format)
+        #[arg(long)]
+        always_convert: bool,
+
+        /// Convert higher quality down (e.g., FLAC to lossy to save space, requires --format)
+        #[arg(long)]
+        convert_down: bool,
+    },
+}

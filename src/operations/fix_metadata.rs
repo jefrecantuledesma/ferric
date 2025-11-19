@@ -18,6 +18,7 @@ pub struct FixMetadataOptions {
     pub check_artist: bool,
     pub check_album: bool,
     pub check_cover: bool,
+    pub check_genre: bool,
     pub dry_run: bool,
     pub verbose: bool,
 }
