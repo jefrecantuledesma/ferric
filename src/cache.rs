@@ -82,7 +82,11 @@ impl MetadataCache {
             .unwrap_or(0);
 
         let size = file_meta.len() as i64;
-        let path_str = path.to_string_lossy().to_string();
+
+        // Use canonical path for lookup (same as insert)
+        let canonical_path = path.canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf());
+        let path_str = canonical_path.to_string_lossy().to_string();
 
         let conn = self.connection.lock().unwrap();
 
@@ -129,7 +133,12 @@ impl MetadataCache {
             .unwrap_or(0);
 
         let size = file_meta.len() as i64;
-        let path_str = path.to_string_lossy().to_string();
+
+        // Always store canonical (absolute) paths to avoid issues with relative paths
+        // when database-clean is run from a different directory
+        let canonical_path = path.canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf());
+        let path_str = canonical_path.to_string_lossy().to_string();
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -261,6 +270,118 @@ impl MetadataCache {
         }
 
         bail!("Unable to determine cache database path")
+    }
+
+    /// Initialize/warm up cache by scanning directories for audio files
+    pub fn initialize_from_directories(
+        &self,
+        directories: &[PathBuf],
+        verbose: bool,
+    ) -> Result<()> {
+        use crate::logger;
+        use crate::metadata::AudioMetadata;
+        use crate::utils;
+        use indicatif::{ProgressBar, ProgressStyle};
+        use rayon::prelude::*;
+        use walkdir::WalkDir;
+
+        logger::stage("Initializing metadata cache");
+        logger::info(&format!("Scanning {} directories", directories.len()));
+
+        // Collect all audio files from all directories
+        let mut all_files = Vec::new();
+        for dir in directories {
+            if !dir.exists() {
+                logger::warning(&format!("Directory does not exist, skipping: {}", dir.display()));
+                continue;
+            }
+
+            logger::info(&format!("Scanning: {}", dir.display()));
+            let files: Vec<PathBuf> = WalkDir::new(dir)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file())
+                .map(|e| e.path().to_path_buf())
+                .filter(|p| utils::is_audio_file(p))
+                .collect();
+
+            logger::info(&format!("  Found {} audio files", files.len()));
+            all_files.extend(files);
+        }
+
+        let total_files = all_files.len();
+        logger::info(&format!("\nTotal audio files found: {}", total_files));
+        logger::info("Extracting metadata and populating cache...");
+
+        let pb = ProgressBar::new(total_files as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] [{bar:40}] {pos}/{len} ({eta}) | Caching metadata...")
+                .unwrap()
+                .progress_chars("█▓▒░"),
+        );
+
+        // Process files in parallel
+        let cache_hits = std::sync::atomic::AtomicUsize::new(0);
+        let cache_misses = std::sync::atomic::AtomicUsize::new(0);
+        let errors = std::sync::atomic::AtomicUsize::new(0);
+
+        all_files.par_iter().for_each(|file| {
+            pb.inc(1);
+
+            // Check if already cached
+            if let Ok(Some(_)) = self.get(file) {
+                cache_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                logger::debug(&format!("Already cached: {}", file.display()), verbose);
+                return;
+            }
+
+            // Extract and cache metadata
+            match AudioMetadata::from_file(file) {
+                Ok(metadata) => {
+                    if let Err(e) = self.insert(file, &metadata) {
+                        logger::error(&format!(
+                            "Failed to cache metadata for {}: {}",
+                            file.display(),
+                            e
+                        ));
+                        errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    } else {
+                        cache_misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        logger::debug(&format!("Cached: {}", file.display()), verbose);
+                    }
+                }
+                Err(e) => {
+                    logger::error(&format!(
+                        "Failed to extract metadata from {}: {}",
+                        file.display(),
+                        e
+                    ));
+                    errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        });
+
+        pb.finish_and_clear();
+
+        let hits = cache_hits.load(std::sync::atomic::Ordering::Relaxed);
+        let misses = cache_misses.load(std::sync::atomic::Ordering::Relaxed);
+        let errs = errors.load(std::sync::atomic::Ordering::Relaxed);
+
+        logger::success(&format!("\nCache initialization complete!"));
+        logger::info(&format!("  Total files: {}", total_files));
+        logger::info(&format!("  Already cached: {}", hits));
+        logger::info(&format!("  Newly cached: {}", misses));
+        if errs > 0 {
+            logger::warning(&format!("  Errors: {}", errs));
+        }
+
+        // Show final cache stats
+        if let Ok(stats) = self.stats() {
+            stats.print();
+        }
+
+        Ok(())
     }
 }
 

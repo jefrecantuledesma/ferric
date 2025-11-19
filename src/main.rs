@@ -198,6 +198,13 @@ enum Commands {
 
     /// Remove entries from the metadata cache that point to missing or changed files
     DatabaseClean,
+
+    /// Initialize/warm up the metadata cache by scanning directories
+    DatabaseInit {
+        /// Input directories to scan (can specify multiple)
+        #[arg(short, long, required = true)]
+        input: Vec<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -395,6 +402,13 @@ fn main() -> Result<()> {
                 .ok_or_else(|| anyhow!("Metadata cache is not initialized"))?;
             let stats = cache.clean_stale_entries()?;
             stats.print();
+            Ok(())
+        }
+
+        Commands::DatabaseInit { input } => {
+            let cache = cache::get_global_cache()
+                .ok_or_else(|| anyhow!("Metadata cache is not initialized"))?;
+            cache.initialize_from_directories(&input, cli.verbose)?;
             Ok(())
         }
     };
