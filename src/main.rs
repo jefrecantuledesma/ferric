@@ -308,6 +308,7 @@ fn main() -> Result<()> {
                 input_dir: input,
                 dry_run: cli.dry_run,
                 verbose: cli.verbose,
+                config: config.clone(),
             };
             fix_naming::run(opts).map(|_| ())
         }

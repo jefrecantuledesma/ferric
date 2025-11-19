@@ -144,6 +144,7 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
         input_dir: options.output_dir.clone(),
         dry_run: options.dry_run,
         verbose: options.verbose,
+        config: options.config.clone(),
     };
 
     match fix_naming::run(naming_opts) {

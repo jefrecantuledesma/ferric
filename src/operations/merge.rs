@@ -22,12 +22,14 @@ pub struct MergeOptions {
     pub config: Config,
 }
 
-/// Merge an organized library into another, upgrading files with better quality
+/// Merge one library into another, preserving directory structure and upgrading based on quality
+/// Files are matched by their relative path (not metadata), and only upgraded if higher quality
 pub fn run(options: MergeOptions) -> Result<OperationStats> {
     logger::stage("Starting library merge");
     logger::info(&format!("Source library: {}", options.input_dir.display()));
     logger::info(&format!("Target library: {}", options.output_dir.display()));
-    logger::info("Will only replace files with higher quality versions");
+    logger::info("Preserving source directory structure");
+    logger::info("Will only replace files at the same path with higher quality versions");
 
     if options.dry_run {
         logger::warning("DRY RUN MODE - No files will be modified");
@@ -64,7 +66,7 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
         quality: u32,
         dest_dir: PathBuf,
         dest_path: PathBuf,
-        title_normalized: String,
+        relative_path: PathBuf,
     }
 
     let file_infos: Vec<FileInfo> = files
@@ -86,24 +88,21 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
 
             let quality = quality::calculate_quality_score(&metadata, &options.config);
 
-            // Determine destination based on metadata
-            let artist = metadata.get_organizing_artist(options.config.naming.prefer_artist);
-            let album = metadata.get_album();
-            let title = metadata.get_title();
+            // Preserve source directory structure - use relative path from input
+            let relative_path = match file.strip_prefix(&options.input_dir) {
+                Ok(rel) => rel.to_path_buf(),
+                Err(e) => {
+                    logger::error(&format!(
+                        "Failed to get relative path for {}: {}",
+                        file.display(),
+                        e
+                    ));
+                    return None;
+                }
+            };
 
-            let artist_safe = utils::clamp_component(
-                &utils::sanitize(&artist),
-                options.config.naming.max_name_length,
-            );
-            let album_safe = utils::clamp_component(
-                &utils::sanitize(&album),
-                options.config.naming.max_name_length,
-            );
-
-            let dest_dir = options.output_dir.join(&artist_safe).join(&album_safe);
-            let filename = file.file_name().unwrap();
-            let dest_path = dest_dir.join(filename);
-            let title_normalized = utils::normalize_for_comparison(&title);
+            let dest_path = options.output_dir.join(&relative_path);
+            let dest_dir = dest_path.parent().unwrap_or(&options.output_dir).to_path_buf();
 
             Some(FileInfo {
                 path: file.clone(),
@@ -111,7 +110,7 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
                 quality,
                 dest_dir,
                 dest_path,
-                title_normalized,
+                relative_path,
             })
         })
         .collect();
@@ -163,27 +162,18 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
 
         existing_files.par_iter().for_each(|file| {
             index_pb.inc(1);
-            if let Ok(metadata) = AudioMetadata::from_file(file) {
-                let artist = metadata.get_organizing_artist(options.config.naming.prefer_artist);
-                let album = metadata.get_album();
-                let title = metadata.get_title();
-                let title_normalized = utils::normalize_for_comparison(&title);
 
-                let artist_safe = utils::clamp_component(
-                    &utils::sanitize(&artist),
-                    options.config.naming.max_name_length,
-                );
-                let album_safe = utils::clamp_component(
-                    &utils::sanitize(&album),
-                    options.config.naming.max_name_length,
-                );
+            // Use relative path as the key to match files by location, not metadata
+            if let Ok(relative_path) = file.strip_prefix(&options.output_dir) {
+                if let Ok(metadata) = AudioMetadata::from_file(file) {
+                    let quality_score = quality::calculate_quality_score(&metadata, &options.config);
 
-                // Create a unique key: "artist/album/title"
-                let key = format!("{}/{}/{}", artist_safe, album_safe, title_normalized);
-                let quality_score = quality::calculate_quality_score(&metadata, &options.config);
+                    // Key is the relative path as a string
+                    let key = relative_path.to_string_lossy().to_string();
 
-                let mut index = existing_files_index.lock().unwrap();
-                index.insert(key, (file.clone(), quality_score));
+                    let mut index = existing_files_index.lock().unwrap();
+                    index.insert(key, (file.clone(), quality_score));
+                }
             }
         });
 
@@ -209,22 +199,9 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
         let new_quality = file_info.quality;
         let dest_dir = &file_info.dest_dir;
         let dest_path = &file_info.dest_path;
-        let title_normalized = &file_info.title_normalized;
 
-        // O(1) lookup in the index instead of O(n) directory scan!
-        let artist = file_info
-            .metadata
-            .get_organizing_artist(options.config.naming.prefer_artist);
-        let album = file_info.metadata.get_album();
-        let artist_safe = utils::clamp_component(
-            &utils::sanitize(&artist),
-            options.config.naming.max_name_length,
-        );
-        let album_safe = utils::clamp_component(
-            &utils::sanitize(&album),
-            options.config.naming.max_name_length,
-        );
-        let lookup_key = format!("{}/{}/{}", artist_safe, album_safe, title_normalized);
+        // O(1) lookup by relative path - matches files by location, not metadata
+        let lookup_key = file_info.relative_path.to_string_lossy().to_string();
 
         let existing_match: Option<(PathBuf, u32)> = {
             let index = existing_files_index.lock().unwrap();
