@@ -238,6 +238,7 @@ fn update_metadata(
     audio_path: &Path,
     artist: Option<&str>,
     album: Option<&str>,
+    genre: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
     if dry_run {
@@ -275,6 +276,13 @@ fn update_metadata(
         args.push(format!("ALBUM={}", a));
     }
 
+    if let Some(g) = genre {
+        args.push("-metadata".to_string());
+        args.push(format!("genre={}", g));
+        args.push("-metadata".to_string());
+        args.push(format!("GENRE={}", g));
+    }
+
     args.push("-y".to_string());
     args.push(temp_path.to_str().unwrap().to_string());
 
@@ -300,9 +308,9 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
     logger::stage("Starting metadata fix operation");
     logger::info(&format!("Input directory: {}", options.input_dir.display()));
 
-    if !options.check_artist && !options.check_album && !options.check_cover {
+    if !options.check_artist && !options.check_album && !options.check_cover && !options.check_genre {
         return Err(anyhow::anyhow!(
-            "No metadata checks specified. Use --artist, --album, or --cover"
+            "No metadata checks specified. Use --artist, --album, --cover, or --genre"
         ));
     }
 
@@ -315,6 +323,9 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
     }
     if options.check_cover {
         checks.push("cover");
+    }
+    if options.check_genre {
+        checks.push("genre");
     }
     logger::info(&format!("Checking for missing: {}", checks.join(", ")));
 
@@ -365,7 +376,8 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
 
         let has_issues = (options.check_artist && metadata.artist.is_none())
             || (options.check_album && metadata.album.is_none())
-            || (options.check_cover && !has_cover);
+            || (options.check_cover && !has_cover)
+            || (options.check_genre && metadata.genre.is_none());
 
         if has_issues {
             let info = FileMetadataInfo {
@@ -496,17 +508,18 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
         }
     }
 
-    // ===== PROCESS ARTIST/ALBUM METADATA (grouped by folder) =====
-    if options.check_artist || options.check_album {
-        logger::stage("\n==================== ARTIST/ALBUM METADATA ====================");
+    // ===== PROCESS ARTIST/ALBUM/GENRE METADATA (grouped by folder) =====
+    if options.check_artist || options.check_album || options.check_genre {
+        logger::stage("\n==================== ARTIST/ALBUM/GENRE METADATA ====================");
 
         // Group files by folder (parent directory)
         let mut folders: HashMap<PathBuf, Vec<FileMetadataInfo>> = HashMap::new();
         for info in &file_info_list {
             let missing_artist = options.check_artist && info.metadata.artist.is_none();
             let missing_album = options.check_album && info.metadata.album.is_none();
+            let missing_genre = options.check_genre && info.metadata.genre.is_none();
 
-            if missing_artist || missing_album {
+            if missing_artist || missing_album || missing_genre {
                 folders
                     .entry(info.parent_dir.clone())
                     .or_insert_with(Vec::new)
@@ -541,6 +554,15 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
                 logger::warning(&format!("  Missing album: {} files", missing_album_count));
             }
 
+            let missing_genre_count = folder_files
+                .iter()
+                .filter(|f| f.metadata.genre.is_none())
+                .count();
+
+            if missing_genre_count > 0 {
+                logger::warning(&format!("  Missing genre: {} files", missing_genre_count));
+            }
+
             logger::info("  Example files:");
             for file in folder_files.iter().take(3) {
                 logger::info(&format!(
@@ -551,6 +573,7 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
 
             let mut new_artist = None;
             let mut new_album = None;
+            let mut new_genre = None;
 
             if missing_artist_count > 0 && options.check_artist {
                 logger::info("");
@@ -579,8 +602,21 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
                 }
             }
 
+            if missing_genre_count > 0 && options.check_genre {
+                logger::info("");
+                match prompt_for_text("Enter genre for this folder (or press Enter to skip): ")
+                {
+                    Ok(input) if !input.is_empty() => {
+                        new_genre = Some(input);
+                    }
+                    _ => {
+                        logger::info("Skipped genre");
+                    }
+                }
+            }
+
             // Update metadata if anything was provided
-            if new_artist.is_some() || new_album.is_some() {
+            if new_artist.is_some() || new_album.is_some() || new_genre.is_some() {
                 logger::info(&format!(
                     "Updating metadata for {} files...",
                     folder_files.len()
@@ -593,6 +629,9 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
                     }
                     if let Some(ref a) = new_album {
                         logger::info(&format!("  Album: {}", a));
+                    }
+                    if let Some(ref g) = new_genre {
+                        logger::info(&format!("  Genre: {}", g));
                     }
                 } else {
                     let pb = ProgressBar::new(folder_files.len() as u64);
@@ -608,6 +647,7 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
 
                     let artist_ref = new_artist.as_deref();
                     let album_ref = new_album.as_deref();
+                    let genre_ref = new_genre.as_deref();
 
                     // Filter files that need updates
                     let files_to_update: Vec<_> = folder_files
@@ -615,11 +655,12 @@ pub fn run(options: FixMetadataOptions) -> Result<()> {
                         .filter(|f| {
                             (artist_ref.is_some() && f.metadata.artist.is_none())
                                 || (album_ref.is_some() && f.metadata.album.is_none())
+                                || (genre_ref.is_some() && f.metadata.genre.is_none())
                         })
                         .collect();
 
                     files_to_update.par_iter().for_each(|info| {
-                        match update_metadata(&info.path, artist_ref, album_ref, options.dry_run) {
+                        match update_metadata(&info.path, artist_ref, album_ref, genre_ref, options.dry_run) {
                             Ok(_) => {
                                 *success_count.lock().unwrap() += 1;
                             }
