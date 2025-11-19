@@ -6,6 +6,7 @@ use crate::quality;
 use crate::utils;
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
+use pathdiff::diff_paths;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
@@ -254,8 +255,9 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
             stats.processed += 1;
         }
 
-        // Use absolute path for symlink source
-        let source_path = match fs::canonicalize(&file_info.path) {
+        // Compute relative path from destination directory to source file
+        // This makes symlinks work inside Docker containers!
+        let source_absolute = match fs::canonicalize(&file_info.path) {
             Ok(p) => p,
             Err(e) => {
                 logger::error(&format!(
@@ -268,8 +270,25 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
                 return;
             }
         };
+
         let dest_path = &file_info.dest_path;
         let dest_dir = &file_info.dest_dir;
+
+        // Create relative path from dest_dir to source file
+        let source_path = match diff_paths(&source_absolute, dest_dir) {
+            Some(relative) => relative,
+            None => {
+                logger::error(&format!(
+                    "Failed to compute relative path from {} to {}",
+                    dest_dir.display(),
+                    source_absolute.display()
+                ));
+                let mut stats = stats_mutex.lock().unwrap();
+                stats.errors += 1;
+                return;
+            }
+        };
+
         let new_quality = file_info.quality;
 
         // Check if destination exists
@@ -307,8 +326,22 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
                     }
                 };
 
+                // Resolve existing target to absolute path for comparison
+                // (it might be relative or absolute)
+                let existing_target_absolute = if existing_target.is_absolute() {
+                    existing_target.clone()
+                } else {
+                    dest_dir.join(&existing_target)
+                };
+
+                // Canonicalize for proper comparison
+                let existing_target_canonical = match fs::canonicalize(&existing_target_absolute) {
+                    Ok(p) => p,
+                    Err(_) => existing_target_absolute, // Use as-is if canonicalize fails (broken symlink)
+                };
+
                 // If it already points to the same file, skip
-                if existing_target == source_path {
+                if existing_target_canonical == source_absolute {
                     logger::debug(
                         &format!(
                             "Symlink already points to correct file: {}",
@@ -317,7 +350,7 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
                         options.verbose,
                     );
                     let mut stats = stats_mutex.lock().unwrap();
-                    stats.add_skipped(source_path.clone(), "symlink already correct".to_string());
+                    stats.add_skipped(source_absolute.clone(), "symlink already correct".to_string());
                     return;
                 }
 
@@ -390,7 +423,7 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
                     );
                     let mut stats = stats_mutex.lock().unwrap();
                     stats.add_skipped(
-                        source_path.clone(),
+                        source_absolute.clone(),
                         format!("same quality ({})", new_quality),
                     );
                 } else {
@@ -405,7 +438,7 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
                     );
                     let mut stats = stats_mutex.lock().unwrap();
                     stats.add_skipped(
-                        source_path.clone(),
+                        source_absolute.clone(),
                         format!("lower quality ({} < {})", new_quality, existing_quality),
                     );
                 }
@@ -417,7 +450,7 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
                 ));
                 let mut stats = stats_mutex.lock().unwrap();
                 stats.add_skipped(
-                    source_path.clone(),
+                    source_absolute.clone(),
                     "destination is not a symlink".to_string(),
                 );
             }

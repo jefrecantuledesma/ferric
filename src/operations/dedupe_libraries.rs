@@ -6,6 +6,7 @@ use crate::quality;
 use crate::utils;
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
+use pathdiff::diff_paths;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
@@ -222,7 +223,7 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
 
         // Best version is the first one (highest quality)
         let best_file = &sorted_files[0];
-        let best_path = match fs::canonicalize(&best_file.path) {
+        let best_path_absolute = match fs::canonicalize(&best_file.path) {
             Ok(p) => p,
             Err(e) => {
                 logger::error(&format!(
@@ -248,6 +249,7 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
         // Replace all other versions with symlinks
         for file_info in sorted_files.iter().skip(1) {
             let current_path = &file_info.path;
+            let current_dir = current_path.parent().unwrap_or_else(|| std::path::Path::new("."));
 
             logger::debug(
                 &format!(
@@ -267,8 +269,22 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
                 // Check if current file is already a symlink pointing to the best file
                 if let Ok(metadata) = fs::symlink_metadata(current_path) {
                     if metadata.is_symlink() {
-                        if let Ok(target) = fs::read_link(current_path) {
-                            if target == best_path {
+                        if let Ok(existing_target) = fs::read_link(current_path) {
+                            // Resolve existing target to absolute path for comparison
+                            // (it might be relative or absolute)
+                            let existing_target_absolute = if existing_target.is_absolute() {
+                                existing_target.clone()
+                            } else {
+                                current_dir.join(&existing_target)
+                            };
+
+                            // Canonicalize for proper comparison
+                            let existing_target_canonical = match fs::canonicalize(&existing_target_absolute) {
+                                Ok(p) => p,
+                                Err(_) => existing_target_absolute, // Use as-is if canonicalize fails (broken symlink)
+                            };
+
+                            if existing_target_canonical == best_path_absolute {
                                 logger::debug(
                                     &format!(
                                         "Already a symlink to best version: {}",
@@ -287,6 +303,22 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
                     }
                 }
 
+                // Compute relative path from current directory to best file
+                // This makes symlinks work inside Docker containers!
+                let best_path_relative = match diff_paths(&best_path_absolute, current_dir) {
+                    Some(relative) => relative,
+                    None => {
+                        logger::error(&format!(
+                            "Failed to compute relative path from {} to {}",
+                            current_dir.display(),
+                            best_path_absolute.display()
+                        ));
+                        let mut stats = stats_mutex.lock().unwrap();
+                        stats.errors += 1;
+                        continue;
+                    }
+                };
+
                 if let Err(e) = fs::remove_file(current_path) {
                     logger::error(&format!(
                         "Failed to remove {}: {}",
@@ -298,11 +330,11 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
                     continue;
                 }
 
-                if let Err(e) = unix_fs::symlink(&best_path, current_path) {
+                if let Err(e) = unix_fs::symlink(&best_path_relative, current_path) {
                     logger::error(&format!(
                         "Failed to create symlink {} -> {}: {}",
                         current_path.display(),
-                        best_path.display(),
+                        best_path_relative.display(),
                         e
                     ));
                     let mut stats = stats_mutex.lock().unwrap();
