@@ -128,12 +128,23 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
     let existing_files_index: Arc<Mutex<HashMap<String, (PathBuf, u32)>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
+    // Canonicalize paths to properly exclude input directory from indexing
+    let input_canonical = options.input_dir.canonicalize().unwrap_or_else(|_| options.input_dir.clone());
+
     if options.output_dir.exists() {
         let existing_files: Vec<PathBuf> = WalkDir::new(&options.output_dir)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
             .map(|e| e.path().to_path_buf())
+            .filter(|p| {
+                // Exclude files from the input directory to avoid matching files against themselves
+                if let Ok(canonical) = p.canonicalize() {
+                    !canonical.starts_with(&input_canonical)
+                } else {
+                    true
+                }
+            })
             .filter(|p| utils::is_audio_file(p))
             .collect();
 
