@@ -60,6 +60,12 @@ pathdiff = "0.2"
 # Metadata cache database
 rusqlite = { version = "0.32", features = ["bundled"] }
 
+# MusicBrainz integration
+musicbrainz_rs = "0.12"
+rusty-chromaprint = "0.3"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
 [dev-dependencies]
 tempfile = "3.10"
 assert_cmd = "2.0"

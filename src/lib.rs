@@ -1,8 +1,10 @@
 // Core library exports for ferric
 pub mod cache;
 pub mod config;
+pub mod fingerprint;
 pub mod logger;
 pub mod metadata;
+pub mod musicbrainz;
 pub mod operations;
 pub mod quality;
 pub mod utils;

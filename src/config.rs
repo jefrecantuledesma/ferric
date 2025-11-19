@@ -15,6 +15,9 @@ pub struct Config {
 
     #[serde(default)]
     pub naming: NamingConfig,
+
+    #[serde(default)]
+    pub musicbrainz: MusicBrainzConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +126,27 @@ pub struct NamingConfig {
     pub include_va: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MusicBrainzConfig {
+    /// AcoustID API key for fingerprint lookups
+    /// Get one from: https://acoustid.org/api-key
+    /// Can also be set via ACOUSTID_API_KEY environment variable
+    #[serde(default)]
+    pub acoustid_api_key: Option<String>,
+
+    /// Minimum confidence threshold for auto-applying metadata (0.0-1.0)
+    #[serde(default = "default_confidence_threshold")]
+    pub confidence_threshold: f32,
+
+    /// User agent for MusicBrainz API requests
+    #[serde(default = "default_user_agent")]
+    pub user_agent: String,
+
+    /// Enable MusicBrainz lookups by default
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
 // Default value functions
 fn default_threads() -> usize {
     0 // 0 means auto-detect
@@ -191,6 +215,18 @@ fn default_lowercase() -> bool {
     true
 }
 
+fn default_confidence_threshold() -> f32 {
+    0.7
+}
+
+fn default_user_agent() -> String {
+    format!("Ferric/{}", env!("CARGO_PKG_VERSION"))
+}
+
+fn default_true() -> bool {
+    true
+}
+
 fn default_codec_multipliers() -> CodecMultipliers {
     CodecMultipliers {
         opus: default_opus_mult(),
@@ -248,6 +284,17 @@ impl Default for NamingConfig {
     }
 }
 
+impl Default for MusicBrainzConfig {
+    fn default() -> Self {
+        Self {
+            acoustid_api_key: std::env::var("ACOUSTID_API_KEY").ok(),
+            confidence_threshold: default_confidence_threshold(),
+            user_agent: default_user_agent(),
+            enabled: default_true(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -255,6 +302,7 @@ impl Default for Config {
             convert: ConvertConfig::default(),
             quality: QualityConfig::default(),
             naming: NamingConfig::default(),
+            musicbrainz: MusicBrainzConfig::default(),
         }
     }
 }

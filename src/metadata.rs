@@ -23,6 +23,14 @@ pub struct AudioMetadata {
     pub sample_rate: Option<u32>,
     pub channels: Option<u8>,
     pub duration_secs: Option<f64>,
+
+    // Audio fingerprinting and MusicBrainz integration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub musicbrainz_recording_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub musicbrainz_release_id: Option<String>,
 }
 
 impl AudioMetadata {
@@ -343,6 +351,49 @@ impl AudioMetadata {
     /// Get bitrate in kbps (kilobits per second)
     pub fn get_bitrate_kbps(&self) -> Option<u32> {
         self.bitrate.map(|br| br / 1000)
+    }
+
+    /// Add a fingerprint to this metadata and optionally update cache
+    pub fn add_fingerprint(&mut self, fingerprint: String, path: &Path) -> Result<()> {
+        self.fingerprint = Some(fingerprint);
+
+        // Update cache if available
+        if let Some(cache) = cache::get_global_cache() {
+            cache
+                .insert(path, self)
+                .context("Failed to update cache with fingerprint")?;
+        }
+
+        Ok(())
+    }
+
+    /// Extract metadata and generate fingerprint in one operation
+    ///
+    /// This is more efficient than calling from_file() then generating fingerprint separately,
+    /// as it only writes to the cache once.
+    pub fn from_file_with_fingerprint(path: &Path) -> Result<Self> {
+        // First extract basic metadata
+        let mut metadata = Self::from_file(path)?;
+
+        // Generate fingerprint
+        match crate::fingerprint::generate_fingerprint(path) {
+            Ok(fp) => {
+                metadata.fingerprint = Some(fp);
+                // Update cache with fingerprint included
+                if let Some(cache) = cache::get_global_cache() {
+                    let _ = cache.insert(path, &metadata);
+                }
+            }
+            Err(e) => {
+                logger::warning(&format!(
+                    "Failed to generate fingerprint for {}: {}",
+                    path.display(),
+                    e
+                ));
+            }
+        }
+
+        Ok(metadata)
     }
 }
 

@@ -113,8 +113,86 @@ enum Commands {
         input: PathBuf,
     },
 
-    /// Fix missing metadata (artist, album, cover art)
+    /// Fix metadata using MusicBrainz (recommended!)
     FixMetadata {
+        /// Directories to process (can specify multiple)
+        #[arg(short, long, num_args = 1..)]
+        input: Vec<PathBuf>,
+
+        /// Fix artist field
+        #[arg(long)]
+        artist: bool,
+
+        /// Fix album field
+        #[arg(long)]
+        album: bool,
+
+        /// Fix album artist field
+        #[arg(long)]
+        album_artist: bool,
+
+        /// Fix title field
+        #[arg(long)]
+        title: bool,
+
+        /// Fix date/year field
+        #[arg(long)]
+        date: bool,
+
+        /// Fix genre field
+        #[arg(long)]
+        genre: bool,
+
+        /// Fix all fields (default if no specific fields specified)
+        #[arg(long)]
+        all: bool,
+
+        /// Use MusicBrainz for lookups (default: true)
+        #[arg(long, default_value_t = true)]
+        use_musicbrainz: bool,
+
+        /// Minimum confidence threshold (0.0-1.0) for auto-apply
+        #[arg(long)]
+        confidence_threshold: Option<f32>,
+
+        /// Always prompt even for high confidence matches
+        #[arg(long)]
+        interactive: bool,
+
+        /// Auto-apply high confidence matches without prompting
+        #[arg(long)]
+        auto_apply: bool,
+
+        /// Skip fingerprinting, use metadata search only
+        #[arg(long)]
+        skip_fingerprinting: bool,
+
+        /// Avoid setting album artist to "Various Artists"
+        #[arg(long, default_value_t = true)]
+        avoid_various_artists: bool,
+
+        /// Allow "Various Artists" (disable the avoidance)
+        #[arg(long)]
+        no_avoid_various_artists: bool,
+
+        /// Overwrite existing metadata (default: false, additive-only)
+        #[arg(long)]
+        overwrite: bool,
+    },
+
+    /// Find and remove duplicate files based on metadata
+    Dedupe {
+        /// Input directory to scan
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Automatically remove duplicates without confirmation
+        #[arg(long)]
+        auto_remove: bool,
+    },
+
+    /// Fix missing metadata manually (legacy mode - use 'fix-metadata' for MusicBrainz instead)
+    FixMetadataManual {
         /// Directory to process
         #[arg(short, long)]
         input: PathBuf,
@@ -130,17 +208,6 @@ enum Commands {
         /// Check for missing album cover
         #[arg(long)]
         cover: bool,
-    },
-
-    /// Find and remove duplicate files based on metadata
-    Dedupe {
-        /// Input directory to scan
-        #[arg(short, long)]
-        input: PathBuf,
-
-        /// Automatically remove duplicates without confirmation
-        #[arg(long)]
-        auto_remove: bool,
     },
 
     /// Run unified pipeline: sort -> optional convert -> fix naming
@@ -204,10 +271,15 @@ enum Commands {
         /// Input directories to scan (can specify multiple)
         #[arg(short, long, required = true)]
         input: Vec<PathBuf>,
+
+        /// Skip generating audio fingerprints (faster but disables MusicBrainz lookups)
+        #[arg(long)]
+        without_fingerprints: bool,
     },
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Load configuration
@@ -324,17 +396,43 @@ fn main() -> Result<()> {
             input,
             artist,
             album,
-            cover,
+            album_artist,
+            title,
+            date,
+            genre,
+            all,
+            use_musicbrainz,
+            confidence_threshold,
+            interactive,
+            auto_apply,
+            skip_fingerprinting,
+            avoid_various_artists,
+            no_avoid_various_artists,
+            overwrite,
         } => {
-            let opts = fix_metadata::FixMetadataOptions {
-                input_dir: input,
-                check_artist: artist,
-                check_album: album,
-                check_cover: cover,
+            // If no fields specified, default to fixing all
+            let fix_all = all || (!artist && !album && !album_artist && !title && !date && !genre);
+
+            let opts = fix_metadata_mb::FixMetadataOptions {
+                input_dirs: input,
                 dry_run: cli.dry_run,
                 verbose: cli.verbose,
+                fix_artist: artist || fix_all,
+                fix_album: album || fix_all,
+                fix_album_artist: album_artist || fix_all,
+                fix_title: title || fix_all,
+                fix_date: date || fix_all,
+                fix_genre: genre || fix_all,
+                fix_all,
+                use_musicbrainz,
+                confidence_threshold: confidence_threshold.unwrap_or(config.musicbrainz.confidence_threshold),
+                interactive,
+                auto_apply,
+                skip_fingerprinting,
+                overwrite,
+                avoid_various_artists: avoid_various_artists && !no_avoid_various_artists,
             };
-            fix_metadata::run(opts)
+            fix_metadata_mb::run(opts, &config).await
         }
 
         Commands::Dedupe { input, auto_remove } => {
@@ -346,6 +444,23 @@ fn main() -> Result<()> {
                 config,
             };
             dedupe::run(opts).map(|_| ())
+        }
+
+        Commands::FixMetadataManual {
+            input,
+            artist,
+            album,
+            cover,
+        } => {
+            let opts = fix_metadata::FixMetadataOptions {
+                input_dir: input,
+                check_artist: artist,
+                check_album: album,
+                check_cover: cover,
+                dry_run: cli.dry_run,
+                verbose: cli.verbose,
+            };
+            fix_metadata::run(opts)
         }
 
         Commands::Unified {
@@ -405,10 +520,11 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::DatabaseInit { input } => {
+        Commands::DatabaseInit { input, without_fingerprints } => {
             let cache = cache::get_global_cache()
                 .ok_or_else(|| anyhow!("Metadata cache is not initialized"))?;
-            cache.initialize_from_directories(&input, cli.verbose)?;
+            // Default to generating fingerprints unless --without-fingerprints is specified
+            cache.initialize_from_directories(&input, cli.verbose, !without_fingerprints)?;
             Ok(())
         }
     };

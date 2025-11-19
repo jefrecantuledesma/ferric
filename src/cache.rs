@@ -55,11 +55,20 @@ impl MetadataCache {
                 mtime INTEGER NOT NULL,
                 size INTEGER NOT NULL,
                 metadata_json TEXT NOT NULL,
-                cached_at INTEGER NOT NULL
+                cached_at INTEGER NOT NULL,
+                fingerprint TEXT,
+                musicbrainz_recording_id TEXT,
+                musicbrainz_release_id TEXT
             )",
             [],
         )
         .context("Failed to create metadata_cache table")?;
+
+        // Migrate existing databases by adding new columns if they don't exist
+        // SQLite will just ignore if the column already exists (with a warning we can ignore)
+        let _ = conn.execute("ALTER TABLE metadata_cache ADD COLUMN fingerprint TEXT", []);
+        let _ = conn.execute("ALTER TABLE metadata_cache ADD COLUMN musicbrainz_recording_id TEXT", []);
+        let _ = conn.execute("ALTER TABLE metadata_cache ADD COLUMN musicbrainz_release_id TEXT", []);
 
         Ok(Self {
             connection: Arc::new(Mutex::new(conn)),
@@ -91,29 +100,45 @@ impl MetadataCache {
         let conn = self.connection.lock().unwrap();
 
         let mut stmt = conn.prepare(
-            "SELECT metadata_json
+            "SELECT metadata_json, fingerprint, musicbrainz_recording_id, musicbrainz_release_id
              FROM metadata_cache
              WHERE path = ?1 AND mtime = ?2 AND size = ?3",
         )?;
 
-        let result: Result<String, rusqlite::Error> =
-            stmt.query_row(params![path_str.as_str(), mtime, size], |row| row.get(0));
+        let result: Result<(String, Option<String>, Option<String>, Option<String>), rusqlite::Error> =
+            stmt.query_row(params![path_str.as_str(), mtime, size], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            });
 
         match result {
-            Ok(json) => match serde_json::from_str(&json) {
-                Ok(metadata) => Ok(Some(metadata)),
-                Err(err) => {
-                    crate::logger::warning(&format!(
-                        "Failed to parse cached metadata for {}: {}. Entry will be cleared.",
-                        path_str, err
-                    ));
-                    let _ = conn.execute(
-                        "DELETE FROM metadata_cache WHERE path = ?1",
-                        params![path_str.as_str()],
-                    );
-                    Ok(None)
+            Ok((json, fingerprint, mb_recording_id, mb_release_id)) => {
+                match serde_json::from_str::<AudioMetadata>(&json) {
+                    Ok(mut metadata) => {
+                        // Populate from dedicated columns if not in JSON (backwards compatibility)
+                        if metadata.fingerprint.is_none() && fingerprint.is_some() {
+                            metadata.fingerprint = fingerprint;
+                        }
+                        if metadata.musicbrainz_recording_id.is_none() && mb_recording_id.is_some() {
+                            metadata.musicbrainz_recording_id = mb_recording_id;
+                        }
+                        if metadata.musicbrainz_release_id.is_none() && mb_release_id.is_some() {
+                            metadata.musicbrainz_release_id = mb_release_id;
+                        }
+                        Ok(Some(metadata))
+                    }
+                    Err(err) => {
+                        crate::logger::warning(&format!(
+                            "Failed to parse cached metadata for {}: {}. Entry will be cleared.",
+                            path_str, err
+                        ));
+                        let _ = conn.execute(
+                            "DELETE FROM metadata_cache WHERE path = ?1",
+                            params![path_str.as_str()],
+                        );
+                        Ok(None)
+                    }
                 }
-            },
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -148,11 +173,22 @@ impl MetadataCache {
 
         let conn = self.connection.lock().unwrap();
 
+        // Store dedicated columns for efficient querying
+        // These fields are also in metadata_json for backwards compatibility
         conn.execute(
             "INSERT OR REPLACE INTO metadata_cache
-             (path, mtime, size, metadata_json, cached_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![path_str.as_str(), mtime, size, metadata_json, now,],
+             (path, mtime, size, metadata_json, cached_at, fingerprint, musicbrainz_recording_id, musicbrainz_release_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                path_str.as_str(),
+                mtime,
+                size,
+                metadata_json,
+                now,
+                metadata.fingerprint.as_deref(),
+                metadata.musicbrainz_recording_id.as_deref(),
+                metadata.musicbrainz_release_id.as_deref(),
+            ],
         )?;
 
         Ok(())
@@ -277,6 +313,7 @@ impl MetadataCache {
         &self,
         directories: &[PathBuf],
         verbose: bool,
+        with_fingerprints: bool,
     ) -> Result<()> {
         use crate::logger;
         use crate::metadata::AudioMetadata;
@@ -288,6 +325,10 @@ impl MetadataCache {
 
         logger::stage("Initializing metadata cache");
         logger::info(&format!("Scanning {} directories", directories.len()));
+
+        if with_fingerprints {
+            logger::info("Fingerprint generation enabled - this will take longer but enables MusicBrainz lookups");
+        }
 
         // Collect all audio files from all directories
         let mut all_files = Vec::new();
@@ -342,7 +383,17 @@ impl MetadataCache {
 
                 // Extract and cache metadata
                 match AudioMetadata::from_file(file) {
-                    Ok(metadata) => {
+                    Ok(mut metadata) => {
+                        // Optionally generate fingerprint
+                        if with_fingerprints && metadata.fingerprint.is_none() {
+                            if let Ok(fp) = crate::fingerprint::generate_fingerprint(file) {
+                                metadata.fingerprint = Some(fp);
+                                logger::debug(&format!("Generated fingerprint for: {}", file.display()), verbose);
+                            } else {
+                                logger::debug(&format!("Failed to generate fingerprint for: {}", file.display()), verbose);
+                            }
+                        }
+
                         if let Err(e) = self.insert(file, &metadata) {
                             logger::error(&format!(
                                 "Failed to cache metadata for {}: {}",
