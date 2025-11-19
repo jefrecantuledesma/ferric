@@ -283,6 +283,7 @@ impl MetadataCache {
         use crate::utils;
         use indicatif::{ProgressBar, ProgressStyle};
         use rayon::prelude::*;
+        use rayon::ThreadPoolBuilder;
         use walkdir::WalkDir;
 
         logger::stage("Initializing metadata cache");
@@ -321,48 +322,55 @@ impl MetadataCache {
                 .progress_chars("█▓▒░"),
         );
 
-        // Process files in parallel
+        // Process files in parallel using a custom thread pool that will shut down when dropped
         let cache_hits = std::sync::atomic::AtomicUsize::new(0);
         let cache_misses = std::sync::atomic::AtomicUsize::new(0);
         let errors = std::sync::atomic::AtomicUsize::new(0);
 
-        all_files.par_iter().for_each(|file| {
-            pb.inc(1);
+        let pool = ThreadPoolBuilder::new().build()?;
 
-            // Check if already cached
-            if let Ok(Some(_)) = self.get(file) {
-                cache_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                logger::debug(&format!("Already cached: {}", file.display()), verbose);
-                return;
-            }
+        pool.install(|| {
+            all_files.par_iter().for_each(|file| {
+                pb.inc(1);
 
-            // Extract and cache metadata
-            match AudioMetadata::from_file(file) {
-                Ok(metadata) => {
-                    if let Err(e) = self.insert(file, &metadata) {
+                // Check if already cached
+                if let Ok(Some(_)) = self.get(file) {
+                    cache_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    logger::debug(&format!("Already cached: {}", file.display()), verbose);
+                    return;
+                }
+
+                // Extract and cache metadata
+                match AudioMetadata::from_file(file) {
+                    Ok(metadata) => {
+                        if let Err(e) = self.insert(file, &metadata) {
+                            logger::error(&format!(
+                                "Failed to cache metadata for {}: {}",
+                                file.display(),
+                                e
+                            ));
+                            errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        } else {
+                            cache_misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            logger::debug(&format!("Cached: {}", file.display()), verbose);
+                        }
+                    }
+                    Err(e) => {
                         logger::error(&format!(
-                            "Failed to cache metadata for {}: {}",
+                            "Failed to extract metadata from {}: {}",
                             file.display(),
                             e
                         ));
                         errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    } else {
-                        cache_misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        logger::debug(&format!("Cached: {}", file.display()), verbose);
                     }
                 }
-                Err(e) => {
-                    logger::error(&format!(
-                        "Failed to extract metadata from {}: {}",
-                        file.display(),
-                        e
-                    ));
-                    errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-            }
+            });
         });
 
         pb.finish_and_clear();
+
+        // Explicitly drop the thread pool to ensure all threads are joined
+        drop(pool);
 
         let hits = cache_hits.load(std::sync::atomic::Ordering::Relaxed);
         let misses = cache_misses.load(std::sync::atomic::Ordering::Relaxed);
@@ -374,6 +382,15 @@ impl MetadataCache {
         logger::info(&format!("  Newly cached: {}", misses));
         if errs > 0 {
             logger::warning(&format!("  Errors: {}", errs));
+        }
+
+        // Try to show cache stats, but don't block if there's contention
+        // (After massive parallel writes, the connection might be busy)
+        logger::info("");
+        if let Ok(stats) = self.stats() {
+            stats.print();
+        } else {
+            logger::info("(Cache stats temporarily unavailable - run 'database-clean' to see stats)");
         }
 
         Ok(())
