@@ -376,26 +376,6 @@ impl MetadataCache {
             logger::warning(&format!("  Errors: {}", errs));
         }
 
-        // Give SQLite a moment to finish any pending WAL checkpoints from parallel writes
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
-        // Force WAL checkpoint to ensure all writes are committed
-        {
-            let conn = self.connection.lock().unwrap();
-            let _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)", []);
-        }
-
-        // Show final cache stats (with timeout protection)
-        match self.stats() {
-            Ok(stats) => {
-                logger::info("");  // Blank line for spacing
-                stats.print();
-            }
-            Err(e) => {
-                logger::warning(&format!("Could not query cache stats: {}", e));
-            }
-        }
-
         Ok(())
     }
 }
