@@ -41,7 +41,7 @@ pub fn run(options: DedupeOptions) -> Result<OperationStats> {
         logger::warning("DRY RUN MODE - No files will be deleted");
     }
 
-    let mut stats = OperationStats::new();
+    let stats = OperationStats::new();
 
     // Collect all audio files
     let files: Vec<PathBuf> = WalkDir::new(&options.input_dir)

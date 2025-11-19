@@ -54,19 +54,23 @@ enum Commands {
         delete_original: bool,
     },
 
-    /// Sort files with intelligent quality comparison (only upgrades)
+    /// Sort files by metadata into Artist/Album folder structure
     Sort {
         /// Input directory to scan
         #[arg(short, long)]
         input: PathBuf,
 
-        /// Output library directory
+        /// Output library directory (defaults to input directory for in-place sorting)
         #[arg(short, long)]
-        output: PathBuf,
+        output: Option<PathBuf>,
 
         /// Move files instead of copying
         #[arg(long)]
         r#move: bool,
+
+        /// Fix naming (normalize apostrophes, whitespace, etc.) while sorting
+        #[arg(long)]
+        fix_naming: bool,
     },
 
     /// Merge an organized library into another, upgrading with better quality
@@ -247,11 +251,14 @@ fn main() -> Result<()> {
             input,
             output,
             r#move,
+            fix_naming,
         } => {
+            let output_dir = output.unwrap_or_else(|| input.clone());
             let opts = sort::SortOptions {
                 input_dir: input,
-                output_dir: output,
+                output_dir,
                 do_move: r#move,
+                fix_naming,
                 dry_run: cli.dry_run,
                 verbose: cli.verbose,
                 config,

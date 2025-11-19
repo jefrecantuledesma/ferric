@@ -9,7 +9,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use strsim::jaro_winkler;
 use walkdir::WalkDir;
 
@@ -535,12 +534,6 @@ fn write_m3u(paths: &[PathBuf], output: &Path) -> Result<()> {
     Ok(())
 }
 
-fn default_output_path(csv_path: &Path) -> PathBuf {
-    let mut path = csv_path.to_path_buf();
-    path.set_extension("m3u");
-    path
-}
-
 fn expand_artist_keys(raw: &str) -> Vec<String> {
     let normalized = utils::normalize_for_comparison(raw);
     if normalized.is_empty() {
@@ -773,7 +766,7 @@ fn find_matches(
     }
 
     // SLOW PATH: Fall back to fuzzy matching only if no exact matches found
-    for (track_idx, track) in library.iter().enumerate() {
+    for track in library.iter() {
         let mut best_score = 0.0;
         let mut match_type = String::new();
 

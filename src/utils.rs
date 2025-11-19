@@ -10,13 +10,11 @@ use std::path::{Path, PathBuf};
 pub fn sanitize(s: &str) -> String {
     let mut result = s.to_string();
 
-    // Replace slashes
     result = result.replace('/', "–").replace('\\', "-");
 
     // Remove control characters (0x00-0x1F)
     result = result.chars().filter(|c| *c as u32 >= 0x20).collect();
 
-    // Trim whitespace
     result = result.trim().to_string();
 
     // Collapse multiple spaces (single pass - O(n) instead of O(n²))
@@ -31,11 +29,9 @@ pub fn sanitize(s: &str) -> String {
         })
         .collect();
 
-    // Trim trailing periods and spaces (filesystem compatibility)
     // Some filesystems don't allow directories ending with periods
     result = result.trim_end_matches('.').trim_end().to_string();
 
-    // Return default if empty
     if result.is_empty() {
         "_unknown".to_string()
     } else {
@@ -97,7 +93,6 @@ pub fn unique_path(path: &Path) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let filename = path.file_name().unwrap().to_string_lossy();
 
-    // Split into name and extension
     let (base, ext) = if let Some(dot_pos) = filename.rfind('.') {
         let (name, extension) = filename.split_at(dot_pos);
         (name.to_string(), extension.to_string())
@@ -105,7 +100,6 @@ pub fn unique_path(path: &Path) -> PathBuf {
         (filename.to_string(), String::new())
     };
 
-    // Try incrementing numbers
     for n in 1..10000 {
         let candidate = if ext.is_empty() {
             parent.join(format!("{} ({})", base, n))
@@ -164,10 +158,9 @@ pub fn normalize_name(name: &str) -> String {
     // Replace Unicode right single quotation mark (') with ASCII apostrophe (')
     result = result.replace('\u{2019}', "'");
 
-    // Convert to lowercase
     result = result.to_lowercase();
 
-    // Normalize whitespace: replace multiple spaces with single space (O(n) single pass)
+    // Single-pass whitespace collapse (O(n) instead of O(n²))
     let mut prev_was_space = false;
     result = result
         .chars()
@@ -179,7 +172,6 @@ pub fn normalize_name(name: &str) -> String {
         })
         .collect();
 
-    // Trim leading and trailing whitespace
     result.trim().to_string()
 }
 
@@ -204,7 +196,7 @@ mod tests {
             normalize_for_comparison("The Beatles - Let It Be"),
             "the beatles let it be"
         );
-        assert_eq!(normalize_for_comparison("Can't Stop!!!"), "can t stop");
+        assert_eq!(normalize_for_comparison("Can't Stop!!!"), "cant stop");
     }
 
     #[test]

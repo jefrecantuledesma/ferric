@@ -72,7 +72,6 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
         .filter_map(|file| {
             pb.inc(1);
 
-            // Extract metadata
             let metadata = match AudioMetadata::from_file(file) {
                 Ok(m) => m,
                 Err(e) => {
@@ -290,7 +289,6 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
                     continue;
                 }
 
-                // Perform action
                 let result = if action_type == "upgrade" {
                     // Always copy when upgrading (even if do_move is true)
                     fs::copy(&file_info.path, &target_path).map(|_| ())

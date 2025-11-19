@@ -59,8 +59,7 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
     }
 
     let stats = OperationStats::new();
-    let mut replaced_count = 0;
-    let mut duplicate_groups_found = 0;
+    let replaced_count = 0;
 
     // Phase 1: Collect all audio files from all input libraries (PARALLEL!)
     logger::info("Phase 1/4: Scanning libraries in parallel...");
@@ -116,7 +115,6 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
         .filter_map(|file| {
             pb.inc(1);
 
-            // Extract metadata
             let metadata = match AudioMetadata::from_file(file) {
                 Ok(m) => m,
                 Err(e) => {
@@ -175,7 +173,7 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
         .filter(|(_, files)| files.len() > 1)
         .collect();
 
-    duplicate_groups_found = duplicate_groups.len();
+    let duplicate_groups_found = duplicate_groups.len();
 
     logger::success(&format!(
         "Found {} songs with duplicates across libraries",
@@ -289,7 +287,6 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
                     }
                 }
 
-                // Delete the current file
                 if let Err(e) = fs::remove_file(current_path) {
                     logger::error(&format!(
                         "Failed to remove {}: {}",
@@ -301,7 +298,6 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
                     continue;
                 }
 
-                // Create symlink to best version
                 if let Err(e) = unix_fs::symlink(&best_path, current_path) {
                     logger::error(&format!(
                         "Failed to create symlink {} -> {}: {}",
@@ -309,7 +305,6 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
                         best_path.display(),
                         e
                     ));
-                    // Try to restore the file somehow? For now just error
                     let mut stats = stats_mutex.lock().unwrap();
                     stats.errors += 1;
                     continue;

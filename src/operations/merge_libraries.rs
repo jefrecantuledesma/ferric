@@ -52,9 +52,9 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
         logger::warning("DRY RUN MODE - No files will be modified");
     }
 
-    let mut stats = OperationStats::new();
-    let mut symlink_created = 0;
-    let mut symlink_upgraded = 0;
+    let stats = OperationStats::new();
+    let symlink_created = 0;
+    let symlink_upgraded = 0;
 
     // Phase 1: Collect all audio files from all input libraries (PARALLEL!)
     logger::info("Phase 1/4: Scanning input libraries in parallel...");
@@ -120,7 +120,6 @@ pub fn run(options: MergeLibrariesOptions) -> Result<OperationStats> {
         .filter_map(|file| {
             pb.inc(1);
 
-            // Extract metadata
             let metadata = match AudioMetadata::from_file(file) {
                 Ok(m) => m,
                 Err(e) => {

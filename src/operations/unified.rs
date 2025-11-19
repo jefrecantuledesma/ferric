@@ -78,7 +78,8 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
     let sort_opts = sort::SortOptions {
         input_dir: options.input_dir.clone(),
         output_dir: options.output_dir.clone(),
-        do_move: false, // Copy files from input to output
+        do_move: false,
+        fix_naming: true, // Unified pipeline always fixes naming
         dry_run: options.dry_run,
         verbose: options.verbose,
         config: options.config.clone(),

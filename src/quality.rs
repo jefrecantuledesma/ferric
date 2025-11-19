@@ -79,8 +79,7 @@ pub fn get_audio_format(codec: &str) -> AudioFormat {
         || codec_lower.contains("aiff")
         || codec_lower.contains("pcm")
         || codec_lower.contains("tta")
-        || codec_lower.contains("wv")
-    // WavPack
+        || codec_lower.contains("wv") // WavPack
     {
         return AudioFormat::Lossless;
     }
