@@ -20,6 +20,8 @@ pub struct SortOptions {
     pub fix_naming: bool,
     pub dry_run: bool,
     pub verbose: bool,
+    pub force: bool,
+    pub destructive: bool,
     pub config: Config,
 }
 
@@ -30,11 +32,72 @@ struct FileInfo {
     dest_path: PathBuf,
 }
 
+/// Check if a file is already organized in the correct Artist/Album structure
+/// Returns true if the file's current path matches the expected path based on metadata
+fn is_already_organized(file_path: &PathBuf, metadata: &AudioMetadata, options: &SortOptions) -> bool {
+    // Get the expected artist and album from metadata
+    let artist = metadata.get_organizing_artist(options.config.naming.prefer_artist);
+    let album = metadata.get_album();
+
+    // Apply normalization if fix_naming is enabled
+    let (artist_expected, album_expected) = if options.fix_naming {
+        (utils::normalize_name(&artist), utils::normalize_name(&album))
+    } else {
+        (artist.clone(), album.clone())
+    };
+
+    // Sanitize and clamp the names
+    let artist_expected = utils::clamp_component(
+        &utils::sanitize(&artist_expected),
+        options.config.naming.max_name_length,
+    );
+    let album_expected = utils::clamp_component(
+        &utils::sanitize(&album_expected),
+        options.config.naming.max_name_length,
+    );
+
+    // Get the current file's parent directories
+    let parent_album = match file_path.parent() {
+        Some(p) => p,
+        None => return false,
+    };
+
+    let parent_artist = match parent_album.parent() {
+        Some(p) => p,
+        None => return false,
+    };
+
+    // Extract the folder names
+    let current_album = match parent_album.file_name() {
+        Some(name) => name.to_string_lossy().to_string(),
+        None => return false,
+    };
+
+    let current_artist = match parent_artist.file_name() {
+        Some(name) => name.to_string_lossy().to_string(),
+        None => return false,
+    };
+
+    // Compare case-insensitively
+    current_artist.to_lowercase() == artist_expected.to_lowercase()
+        && current_album.to_lowercase() == album_expected.to_lowercase()
+}
+
 /// Sort files into Artist/Album folder structure based on metadata
 pub fn run(options: SortOptions) -> Result<OperationStats> {
     logger::stage("Sorting files by metadata into Artist/Album structure");
     logger::info(&format!("Input directory: {}", options.input_dir.display()));
     logger::info(&format!("Output directory: {}", options.output_dir.display()));
+
+    if options.force {
+        logger::info("Force mode enabled - will re-sort all files including already-organized ones");
+    } else {
+        logger::info("Skipping files that are already organized (use --force to override)");
+    }
+
+    if options.destructive {
+        logger::warning("DESTRUCTIVE MODE - Will delete lower quality duplicate files");
+    }
 
     if options.fix_naming {
         logger::info("Will normalize file and folder names");
@@ -85,6 +148,17 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
                     return None;
                 }
             };
+
+            // Skip files that are already organized unless force is enabled
+            if !options.force && is_already_organized(file, &metadata, &options) {
+                logger::debug(
+                    &format!("File already organized, skipping: {}", file.display()),
+                    options.verbose,
+                );
+                let mut stats = stats_mutex.lock().unwrap();
+                stats.add_skipped(file.clone(), "already organized".to_string());
+                return None;
+            }
 
             let quality = quality::calculate_quality_score(&metadata, &options.config);
 
@@ -171,7 +245,29 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
                 dest_path.display()
             ));
 
-            files.iter().max_by_key(|f| f.quality).unwrap()
+            let best_file = files.iter().max_by_key(|f| f.quality).unwrap();
+
+            // Delete lower quality duplicates if destructive mode is enabled
+            if options.destructive && !options.dry_run {
+                for file in files.iter() {
+                    if file.path != best_file.path {
+                        if let Err(e) = fs::remove_file(&file.path) {
+                            logger::error(&format!(
+                                "Failed to delete duplicate file {}: {}",
+                                file.path.display(),
+                                e
+                            ));
+                        } else {
+                            logger::debug(
+                                &format!("Deleted duplicate file: {}", file.path.display()),
+                                options.verbose,
+                            );
+                        }
+                    }
+                }
+            }
+
+            best_file
         } else {
             &files[0]
         };
@@ -219,6 +315,23 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
                         file_to_use.path.clone(),
                         format!("lower quality ({} < {})", file_to_use.quality, existing_quality),
                     );
+
+                    // Delete lower quality file if destructive mode is enabled
+                    if options.destructive && !options.dry_run {
+                        if let Err(e) = fs::remove_file(&file_to_use.path) {
+                            logger::error(&format!(
+                                "Failed to delete lower quality file {}: {}",
+                                file_to_use.path.display(),
+                                e
+                            ));
+                        } else {
+                            logger::debug(
+                                &format!("Deleted lower quality file: {}", file_to_use.path.display()),
+                                options.verbose,
+                            );
+                        }
+                    }
+
                     return;
                 }
             }
