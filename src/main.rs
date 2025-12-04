@@ -259,6 +259,14 @@ enum Commands {
         /// Fix naming (normalize apostrophes, whitespace, etc.) while sorting
         #[arg(long)]
         fix_naming: bool,
+
+        /// Force re-sort all files, even if already organized (default: skip already-organized files)
+        #[arg(long)]
+        force: bool,
+
+        /// Delete lower quality duplicate files (use with caution!)
+        #[arg(long)]
+        destructive: bool,
     },
 
     /// Run unified pipeline: sort -> optional convert -> fix naming
@@ -277,7 +285,7 @@ enum Commands {
 
         /// Delete original files after conversion (requires --format)
         #[arg(long)]
-        destructive: bool,
+        delete_originals: bool,
 
         /// Always convert regardless of quality (requires --format)
         #[arg(long)]
@@ -286,6 +294,14 @@ enum Commands {
         /// Convert higher quality down (e.g., FLAC to lossy to save space, requires --format)
         #[arg(long)]
         convert_down: bool,
+
+        /// Force re-sort all files, even if already organized (default: skip already-organized files)
+        #[arg(long)]
+        force: bool,
+
+        /// Delete lower quality duplicate files during sort (use with caution!)
+        #[arg(long)]
+        destructive: bool,
     },
 }
 
@@ -350,6 +366,8 @@ async fn main() -> Result<()> {
             output,
             r#move,
             fix_naming,
+            force,
+            destructive,
         } => {
             let output_dir = output.unwrap_or_else(|| input.clone());
             let opts = sort::SortOptions {
@@ -357,6 +375,8 @@ async fn main() -> Result<()> {
                 output_dir,
                 do_move: r#move,
                 fix_naming,
+                force,
+                destructive,
                 dry_run: cli.dry_run,
                 verbose: cli.verbose,
                 config,
@@ -488,17 +508,21 @@ async fn main() -> Result<()> {
             input,
             output,
             format,
-            destructive,
+            delete_originals,
             always_convert,
             convert_down,
+            force,
+            destructive,
         } => {
             let opts = unified::UnifiedOptions {
                 input_dir: input,
                 output_dir: output,
                 output_format: format,
-                destructive,
+                delete_originals,
                 always_convert,
                 convert_down,
+                force,
+                destructive,
                 dry_run: cli.dry_run,
                 verbose: cli.verbose,
                 config,

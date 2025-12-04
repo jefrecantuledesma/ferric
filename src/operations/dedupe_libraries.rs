@@ -28,6 +28,7 @@ struct FileInfo {
     metadata: AudioMetadata,
     quality: u32,
     song_id: String, // Normalized identifier for deduplication
+    modified_time: std::time::SystemTime,
 }
 
 /// Deduplicate files across multiple libraries by replacing lower quality versions with symlinks
@@ -130,6 +131,19 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
 
             let quality = quality::calculate_quality_score(&metadata, &options.config);
 
+            // Get file modification time for tiebreaking when quality is equal
+            let modified_time = match fs::metadata(file).and_then(|m| m.modified()) {
+                Ok(time) => time,
+                Err(e) => {
+                    logger::error(&format!(
+                        "Failed to get modification time for {}: {}",
+                        file.display(),
+                        e
+                    ));
+                    return None;
+                }
+            };
+
             // Create a normalized song ID for deduplication
             let artist = metadata.get_organizing_artist(options.config.naming.prefer_artist);
             let album = metadata.get_album();
@@ -147,6 +161,7 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
                 metadata,
                 quality,
                 song_id,
+                modified_time,
             })
         })
         .collect();
@@ -217,9 +232,18 @@ pub fn run(options: DedupeLibrariesOptions) -> Result<OperationStats> {
     duplicate_groups.par_iter().for_each(|(_song_id, files)| {
         pb2.inc(1);
 
-        // Sort by quality (descending) to find the best version
+        // Sort by quality (descending), then by modification time (oldest first) as tiebreaker
         let mut sorted_files = files.clone();
-        sorted_files.sort_by(|a, b| b.quality.cmp(&a.quality));
+        sorted_files.sort_by(|a, b| {
+            // First compare by quality (descending - highest quality first)
+            match b.quality.cmp(&a.quality) {
+                std::cmp::Ordering::Equal => {
+                    // If quality is equal, prefer older files (ascending time - oldest first)
+                    a.modified_time.cmp(&b.modified_time)
+                }
+                other => other,
+            }
+        });
 
         // Best version is the first one (highest quality)
         let best_file = &sorted_files[0];

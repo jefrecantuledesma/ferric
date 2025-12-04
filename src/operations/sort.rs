@@ -20,6 +20,8 @@ pub struct SortOptions {
     pub fix_naming: bool,
     pub dry_run: bool,
     pub verbose: bool,
+    pub force: bool,
+    pub destructive: bool,
     pub config: Config,
 }
 
@@ -30,11 +32,129 @@ struct FileInfo {
     dest_path: PathBuf,
 }
 
+/// Recursively remove empty parent directories up to (but not including) the root directory
+/// Also removes directories that only contain non-audio files (like leftover cover art)
+fn cleanup_empty_dirs(file_path: &PathBuf, root_dir: &PathBuf) {
+    if let Some(parent) = file_path.parent() {
+        let parent_path = parent.to_path_buf();
+
+        // Don't remove the root directory itself
+        if parent_path == *root_dir {
+            return;
+        }
+
+        // Check directory contents
+        if let Ok(entries) = fs::read_dir(&parent_path) {
+            let remaining_files: Vec<PathBuf> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .collect();
+
+            // Check if directory is empty or only contains non-audio files
+            let only_non_audio = remaining_files.iter()
+                .all(|p| p.is_dir() || !utils::is_audio_file(p));
+
+            if remaining_files.is_empty() || only_non_audio {
+                // Remove any leftover non-audio files first
+                for file in remaining_files.iter().filter(|p| p.is_file()) {
+                    if let Err(e) = fs::remove_file(file) {
+                        logger::debug(
+                            &format!("Failed to remove leftover file {}: {}", file.display(), e),
+                            false,
+                        );
+                    } else {
+                        logger::debug(
+                            &format!("Removed leftover file: {}", file.display()),
+                            false,
+                        );
+                    }
+                }
+
+                // Now remove the directory
+                if let Err(e) = fs::remove_dir(&parent_path) {
+                    logger::debug(
+                        &format!("Failed to remove directory {}: {}", parent_path.display(), e),
+                        false,
+                    );
+                } else {
+                    logger::debug(
+                        &format!("Removed directory: {}", parent_path.display()),
+                        false,
+                    );
+                    // Recursively check parent directories
+                    cleanup_empty_dirs(&parent_path, root_dir);
+                }
+            }
+        }
+    }
+}
+
+/// Check if a file is already organized in the correct Artist/Album structure
+/// Returns true if the file's current path matches the expected path based on metadata
+fn is_already_organized(file_path: &PathBuf, metadata: &AudioMetadata, options: &SortOptions) -> bool {
+    // Get the expected artist and album from metadata
+    let artist = metadata.get_organizing_artist(options.config.naming.prefer_artist);
+    let album = metadata.get_album();
+
+    // Apply normalization if fix_naming is enabled
+    let (artist_expected, album_expected) = if options.fix_naming {
+        (utils::normalize_name(&artist), utils::normalize_name(&album))
+    } else {
+        (artist.clone(), album.clone())
+    };
+
+    // Sanitize and clamp the names
+    let artist_expected = utils::clamp_component(
+        &utils::sanitize(&artist_expected),
+        options.config.naming.max_name_length,
+    );
+    let album_expected = utils::clamp_component(
+        &utils::sanitize(&album_expected),
+        options.config.naming.max_name_length,
+    );
+
+    // Get the current file's parent directories
+    let parent_album = match file_path.parent() {
+        Some(p) => p,
+        None => return false,
+    };
+
+    let parent_artist = match parent_album.parent() {
+        Some(p) => p,
+        None => return false,
+    };
+
+    // Extract the folder names
+    let current_album = match parent_album.file_name() {
+        Some(name) => name.to_string_lossy().to_string(),
+        None => return false,
+    };
+
+    let current_artist = match parent_artist.file_name() {
+        Some(name) => name.to_string_lossy().to_string(),
+        None => return false,
+    };
+
+    // Compare case-insensitively
+    current_artist.to_lowercase() == artist_expected.to_lowercase()
+        && current_album.to_lowercase() == album_expected.to_lowercase()
+}
+
 /// Sort files into Artist/Album folder structure based on metadata
 pub fn run(options: SortOptions) -> Result<OperationStats> {
     logger::stage("Sorting files by metadata into Artist/Album structure");
     logger::info(&format!("Input directory: {}", options.input_dir.display()));
     logger::info(&format!("Output directory: {}", options.output_dir.display()));
+
+    if options.force {
+        logger::info("Force mode enabled - will re-sort all files including already-organized ones");
+    } else {
+        logger::info("Skipping files that are already organized (use --force to override)");
+    }
+
+    if options.destructive {
+        logger::warning("DESTRUCTIVE MODE - Will delete lower quality duplicate files");
+    }
 
     if options.fix_naming {
         logger::info("Will normalize file and folder names");
@@ -85,6 +205,17 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
                     return None;
                 }
             };
+
+            // Skip files that are already organized unless force is enabled
+            if !options.force && is_already_organized(file, &metadata, &options) {
+                logger::debug(
+                    &format!("File already organized, skipping: {}", file.display()),
+                    options.verbose,
+                );
+                let mut stats = stats_mutex.lock().unwrap();
+                stats.add_skipped(file.clone(), "already organized".to_string());
+                return None;
+            }
 
             let quality = quality::calculate_quality_score(&metadata, &options.config);
 
@@ -166,12 +297,51 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
             *dup_count += files.len() - 1;
 
             logger::warning(&format!(
-                "Found {} files with same metadata, keeping highest quality: {}",
+                "Found {} files with same metadata, keeping highest quality (or oldest if equal): {}",
                 files.len(),
                 dest_path.display()
             ));
 
-            files.iter().max_by_key(|f| f.quality).unwrap()
+            // Choose best file: highest quality, then oldest modification time if quality is equal
+            let best_file = files.iter().max_by(|a, b| {
+                match a.quality.cmp(&b.quality) {
+                    std::cmp::Ordering::Equal => {
+                        // If quality is equal, prefer older file (lower mtime)
+                        let a_mtime = fs::metadata(&a.path)
+                            .and_then(|m| m.modified())
+                            .ok();
+                        let b_mtime = fs::metadata(&b.path)
+                            .and_then(|m| m.modified())
+                            .ok();
+                        b_mtime.cmp(&a_mtime) // Reversed: b compared to a = prefer older
+                    }
+                    other => other,
+                }
+            }).unwrap();
+
+            // Delete lower quality duplicates if destructive mode is enabled
+            if options.destructive && !options.dry_run {
+                for file in files.iter() {
+                    if file.path != best_file.path {
+                        if let Err(e) = fs::remove_file(&file.path) {
+                            logger::error(&format!(
+                                "Failed to delete duplicate file {}: {}",
+                                file.path.display(),
+                                e
+                            ));
+                        } else {
+                            logger::debug(
+                                &format!("Deleted duplicate file: {}", file.path.display()),
+                                options.verbose,
+                            );
+                            // Clean up any empty directories left behind
+                            cleanup_empty_dirs(&file.path, &options.input_dir);
+                        }
+                    }
+                }
+            }
+
+            best_file
         } else {
             &files[0]
         };
@@ -219,6 +389,25 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
                         file_to_use.path.clone(),
                         format!("lower quality ({} < {})", file_to_use.quality, existing_quality),
                     );
+
+                    // Delete lower quality file if destructive mode is enabled
+                    if options.destructive && !options.dry_run {
+                        if let Err(e) = fs::remove_file(&file_to_use.path) {
+                            logger::error(&format!(
+                                "Failed to delete lower quality file {}: {}",
+                                file_to_use.path.display(),
+                                e
+                            ));
+                        } else {
+                            logger::debug(
+                                &format!("Deleted lower quality file: {}", file_to_use.path.display()),
+                                options.verbose,
+                            );
+                            // Clean up any empty directories left behind
+                            cleanup_empty_dirs(&file_to_use.path, &options.input_dir);
+                        }
+                    }
+
                     return;
                 }
             }
@@ -268,6 +457,11 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
                         options.verbose,
                     );
                     stats.succeeded += 1;
+
+                    // If we moved the file, clean up any empty directories left behind
+                    if options.do_move {
+                        cleanup_empty_dirs(&file_to_use.path, &options.input_dir);
+                    }
                 }
                 Err(e) => {
                     logger::error(&format!(

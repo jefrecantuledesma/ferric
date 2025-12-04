@@ -8,9 +8,11 @@ pub struct UnifiedOptions {
     pub input_dir: PathBuf,
     pub output_dir: PathBuf,
     pub output_format: Option<String>,
-    pub destructive: bool,
+    pub delete_originals: bool,
     pub always_convert: bool,
     pub convert_down: bool,
+    pub force: bool,
+    pub destructive: bool,
     pub dry_run: bool,
     pub verbose: bool,
     pub config: Config,
@@ -32,8 +34,8 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
     if should_convert {
         let format = options.output_format.as_ref().unwrap().to_uppercase();
         logger::info(&format!("Convert to: {}", format));
-        if options.destructive {
-            logger::info("Destructive mode: YES - will delete originals");
+        if options.delete_originals {
+            logger::info("Delete originals: YES - will delete originals after conversion");
         }
     } else {
         logger::info("Convert: NO");
@@ -50,12 +52,12 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
         if should_convert {
             let format = options.output_format.as_ref().unwrap().to_uppercase();
             logger::info(&format!("  2. Convert to {} (only higher quality)", format));
-            if options.destructive {
+            if options.delete_originals {
                 logger::warning(&format!("  3. DELETE original non-{} files", format));
             }
             logger::info(&format!(
                 "  {}. Normalize all naming",
-                if options.destructive { "4" } else { "3" }
+                if options.delete_originals { "4" } else { "3" }
             ));
         } else {
             logger::info("  2. Normalize all naming");
@@ -80,6 +82,8 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
         output_dir: options.output_dir.clone(),
         do_move: false,
         fix_naming: true, // Unified pipeline always fixes naming
+        force: options.force,
+        destructive: options.destructive,
         dry_run: options.dry_run,
         verbose: options.verbose,
         config: options.config.clone(),
@@ -111,7 +115,7 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
             input_dir: options.output_dir.clone(),
             output_dir: options.output_dir.clone(),
             output_format: options.output_format.clone(),
-            delete_original: options.destructive,
+            delete_original: options.delete_originals,
             always_convert: options.always_convert,
             convert_down: options.convert_down,
             dry_run: options.dry_run,

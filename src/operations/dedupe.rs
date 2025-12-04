@@ -55,7 +55,7 @@ pub fn run(options: DedupeOptions) -> Result<OperationStats> {
     logger::info(&format!("Found {} audio files to analyze", files.len()));
 
     // Build signature map (parallelized for performance)
-    let signature_map: Arc<Mutex<HashMap<TrackSignature, Vec<(PathBuf, AudioMetadata, u32)>>>> =
+    let signature_map: Arc<Mutex<HashMap<TrackSignature, Vec<(PathBuf, AudioMetadata, u32, std::time::SystemTime)>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let stats_mutex = Arc::new(Mutex::new(stats));
 
@@ -86,11 +86,17 @@ pub fn run(options: DedupeOptions) -> Result<OperationStats> {
 
                 let quality_score = quality::calculate_quality_score(&metadata, &options.config);
 
+                // Get file modification time for tiebreaking when quality is equal
+                let modified_time = fs::metadata(file)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
                 let mut map = signature_map.lock().unwrap();
                 map.entry(signature).or_insert_with(Vec::new).push((
                     file.clone(),
                     metadata,
                     quality_score,
+                    modified_time,
                 ));
             }
             Err(e) => {
@@ -130,12 +136,21 @@ pub fn run(options: DedupeOptions) -> Result<OperationStats> {
                 signature.title
             ));
 
-            // Sort by quality (highest first)
+            // Sort by quality (highest first), then by modification time (oldest first) as tiebreaker
             let mut sorted_files = files.clone();
-            sorted_files.sort_by(|a, b| b.2.cmp(&a.2));
+            sorted_files.sort_by(|a, b| {
+                // First compare by quality (descending - highest quality first)
+                match b.2.cmp(&a.2) {
+                    std::cmp::Ordering::Equal => {
+                        // If quality is equal, prefer older files (ascending time - oldest first)
+                        a.3.cmp(&b.3)
+                    }
+                    other => other,
+                }
+            });
 
-            // Keep the highest quality, mark others for removal
-            for (idx, (path, metadata, quality)) in sorted_files.iter().enumerate() {
+            // Keep the highest quality (or oldest if quality is equal), mark others for removal
+            for (idx, (path, metadata, quality, _modified_time)) in sorted_files.iter().enumerate() {
                 if idx == 0 {
                     logger::success(&format!(
                         "  [KEEP] {} (quality: {}, codec: {})",
