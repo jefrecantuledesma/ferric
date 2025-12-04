@@ -388,4 +388,4 @@ Console output includes color-coded messages:
 - Make the playlist matching even smarter (it's already pretty smart though)
 
 ## License
-MIT License - do whatever you want with this code, just don't blame me if it eats your music library. (But seriously, use `--dry-run` first!)
+GPL License - do whatever you want with this code, just don't blame me if it eats your music library. (But seriously, use `--dry-run` first!)
