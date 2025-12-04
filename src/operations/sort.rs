@@ -89,6 +89,7 @@ fn cleanup_empty_dirs(file_path: &PathBuf, root_dir: &PathBuf) {
     }
 }
 
+
 /// Check if a file is already organized in the correct Artist/Album structure
 /// Returns true if the file's current path matches the expected path based on metadata
 fn is_already_organized(file_path: &PathBuf, metadata: &AudioMetadata, options: &SortOptions) -> bool {
