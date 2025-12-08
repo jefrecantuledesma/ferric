@@ -151,14 +151,16 @@ pub fn get_extension(path: &Path) -> Option<String> {
         .map(|s| s.to_lowercase())
 }
 
-/// Normalize name: fix curly apostrophes, lowercase, normalize whitespace
-pub fn normalize_name(name: &str) -> String {
+/// Normalize name: fix curly apostrophes, optionally lowercase, normalize whitespace
+pub fn normalize_name(name: &str, lowercase: bool) -> String {
     let mut result = name.to_string();
 
     // Replace Unicode right single quotation mark (') with ASCII apostrophe (')
     result = result.replace('\u{2019}', "'");
 
-    result = result.to_lowercase();
+    if lowercase {
+        result = result.to_lowercase();
+    }
 
     // Single-pass whitespace collapse (O(n) instead of O(n²))
     let mut prev_was_space = false;
@@ -210,8 +212,10 @@ mod tests {
 
     #[test]
     fn test_normalize_name() {
-        assert_eq!(normalize_name("Can't Stop"), "can't stop");
-        assert_eq!(normalize_name("Can't Stop"), "can't stop"); // curly apostrophe
-        assert_eq!(normalize_name("LOUD  NOISES"), "loud noises");
+        assert_eq!(normalize_name("Can't Stop", true), "can't stop");
+        assert_eq!(normalize_name("Can't Stop", true), "can't stop"); // curly apostrophe
+        assert_eq!(normalize_name("LOUD  NOISES", true), "loud noises");
+        assert_eq!(normalize_name("Can't Stop", false), "Can't Stop");
+        assert_eq!(normalize_name("LOUD  NOISES", false), "LOUD NOISES");
     }
 }

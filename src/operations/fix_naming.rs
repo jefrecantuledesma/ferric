@@ -21,9 +21,13 @@ pub struct FixNamingOptions {
 pub fn run(options: FixNamingOptions) -> Result<OperationStats> {
     logger::stage("Starting name normalization");
     logger::info(&format!("Input directory: {}", options.input_dir.display()));
-    logger::info(
-        "Fixes: curly apostrophes -> straight, uppercase -> lowercase, whitespace normalization",
-    );
+
+    let fixes = if options.config.naming.lowercase {
+        "Fixes: curly apostrophes -> straight, uppercase -> lowercase, whitespace normalization"
+    } else {
+        "Fixes: curly apostrophes -> straight, whitespace normalization (lowercase disabled)"
+    };
+    logger::info(fixes);
 
     if options.dry_run {
         logger::warning("DRY RUN MODE - No changes will be made");
@@ -65,7 +69,7 @@ fn fix_files(root: &Path, stats: &mut OperationStats, options: &FixNamingOptions
 
         if let Some(filename) = file.file_name() {
             let filename_str = filename.to_string_lossy().to_string();
-            let normalized = utils::normalize_name(&filename_str);
+            let normalized = utils::normalize_name(&filename_str, options.config.naming.lowercase);
 
             if filename_str != normalized {
                 let parent = file.parent().unwrap_or_else(|| Path::new("."));
@@ -148,7 +152,7 @@ fn fix_directories(
 
         if let Some(dirname) = dir.file_name() {
             let dirname_str = dirname.to_string_lossy().to_string();
-            let normalized = utils::normalize_name(&dirname_str);
+            let normalized = utils::normalize_name(&dirname_str, options.config.naming.lowercase);
 
             if dirname_str != normalized {
                 let parent = dir.parent().unwrap_or_else(|| Path::new("."));
@@ -272,7 +276,7 @@ fn merge_directory_contents(
 
         // Normalize the filename
         let filename = file.file_name().unwrap().to_string_lossy().to_string();
-        let normalized_filename = utils::normalize_name(&filename);
+        let normalized_filename = utils::normalize_name(&filename, options.config.naming.lowercase);
         let final_target_path = target_path
             .parent()
             .unwrap()

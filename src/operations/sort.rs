@@ -99,7 +99,7 @@ fn is_already_organized(file_path: &PathBuf, metadata: &AudioMetadata, options: 
 
     // Apply normalization if fix_naming is enabled
     let (artist_expected, album_expected) = if options.fix_naming {
-        (utils::normalize_name(&artist), utils::normalize_name(&album))
+        (utils::normalize_name(&artist, options.config.naming.lowercase), utils::normalize_name(&album, options.config.naming.lowercase))
     } else {
         (artist.clone(), album.clone())
     };
@@ -227,9 +227,9 @@ pub fn run(options: SortOptions) -> Result<OperationStats> {
             // Determine destination path
             let (artist_final, album_final, title_final) = if options.fix_naming {
                 (
-                    utils::normalize_name(&artist),
-                    utils::normalize_name(&album),
-                    utils::normalize_name(&title),
+                    utils::normalize_name(&artist, options.config.naming.lowercase),
+                    utils::normalize_name(&album, options.config.naming.lowercase),
+                    utils::normalize_name(&title, options.config.naming.lowercase),
                 )
             } else {
                 (artist.clone(), album.clone(), title.clone())
