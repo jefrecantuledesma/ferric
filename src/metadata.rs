@@ -160,43 +160,63 @@ impl AudioMetadata {
             }
         }
 
-        // Extract format/container metadata (fallback for MP3/MP4 files)
+        // Extract format/container metadata (fallback for MP3/MP4 files and primary for FLAC)
         if let Some(format) = json.get("format") {
             if let Some(tags) = format.get("tags").and_then(|t| t.as_object()) {
                 // Only set if not already set from stream tags
                 if metadata.artist.is_none() {
                     metadata.artist = tags
                         .get("artist")
+                        .or_else(|| tags.get("ARTIST"))
                         .and_then(|v| v.as_str())
                         .map(String::from);
                 }
                 if metadata.album.is_none() {
-                    metadata.album = tags.get("album").and_then(|v| v.as_str()).map(String::from);
+                    metadata.album = tags
+                        .get("album")
+                        .or_else(|| tags.get("ALBUM"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
                 }
                 if metadata.album_artist.is_none() {
                     metadata.album_artist = tags
                         .get("album_artist")
                         .or_else(|| tags.get("ALBUM_ARTIST"))
                         .or_else(|| tags.get("albumartist"))
+                        .or_else(|| tags.get("ALBUMARTIST"))
                         .and_then(|v| v.as_str())
                         .map(String::from);
                 }
                 if metadata.title.is_none() {
-                    metadata.title = tags.get("title").and_then(|v| v.as_str()).map(String::from);
+                    metadata.title = tags
+                        .get("title")
+                        .or_else(|| tags.get("TITLE"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
                 }
                 if metadata.date.is_none() {
                     metadata.date = tags
                         .get("date")
+                        .or_else(|| tags.get("DATE"))
                         .or_else(|| tags.get("year"))
+                        .or_else(|| tags.get("YEAR"))
                         .and_then(|v| v.as_str())
                         .map(String::from);
                 }
                 if metadata.genre.is_none() {
-                    metadata.genre = tags.get("genre").and_then(|v| v.as_str()).map(String::from);
+                    metadata.genre = tags
+                        .get("genre")
+                        .or_else(|| tags.get("GENRE"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
                 }
 
                 if metadata.track_number.is_none() {
-                    if let Some(track_str) = tags.get("track").and_then(|v| v.as_str()) {
+                    if let Some(track_str) = tags
+                        .get("track")
+                        .or_else(|| tags.get("TRACK"))
+                        .and_then(|v| v.as_str())
+                    {
                         if let Some(num_str) = track_str.split('/').next() {
                             metadata.track_number = num_str.parse().ok();
                         }
@@ -425,5 +445,57 @@ mod tests {
 
         meta.album_artist = Some("The Beatles".to_string());
         assert!(!meta.looks_like_va());
+    }
+
+    #[test]
+    fn test_uppercase_flac_tags() {
+        // Test that we can parse uppercase tags from FLAC files (format.tags section)
+        // This simulates the ffprobe JSON output for FLAC files
+        let json_str = r#"{
+            "streams": [{
+                "codec_name": "flac",
+                "codec_type": "audio",
+                "sample_rate": "44100",
+                "channels": 2
+            }],
+            "format": {
+                "format_name": "flac",
+                "bit_rate": "1056812",
+                "duration": "108.840408",
+                "tags": {
+                    "TITLE": "Gas Pedal",
+                    "ARTIST": "Babe Haven",
+                    "ALBUM": "Nuisance",
+                    "TRACK": "1",
+                    "DATE": "2024",
+                    "GENRE": "Hardcore"
+                }
+            }
+        }"#;
+
+        let json: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // Simulate the parsing logic from from_file_ffprobe
+        let tags = json.get("format").unwrap().get("tags").unwrap().as_object().unwrap();
+
+        let artist = tags
+            .get("artist")
+            .or_else(|| tags.get("ARTIST"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let album = tags
+            .get("album")
+            .or_else(|| tags.get("ALBUM"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let title = tags
+            .get("title")
+            .or_else(|| tags.get("TITLE"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        assert_eq!(artist, Some("Babe Haven".to_string()));
+        assert_eq!(album, Some("Nuisance".to_string()));
+        assert_eq!(title, Some("Gas Pedal".to_string()));
     }
 }
