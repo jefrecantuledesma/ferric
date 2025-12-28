@@ -36,56 +36,8 @@ struct FileInfo {
 /// Also removes directories that only contain non-audio files (like leftover cover art)
 fn cleanup_empty_dirs(file_path: &PathBuf, root_dir: &PathBuf) {
     if let Some(parent) = file_path.parent() {
-        let parent_path = parent.to_path_buf();
-
-        // Don't remove the root directory itself
-        if parent_path == *root_dir {
-            return;
-        }
-
-        // Check directory contents
-        if let Ok(entries) = fs::read_dir(&parent_path) {
-            let remaining_files: Vec<PathBuf> = entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .collect();
-
-            // Check if directory is empty or only contains non-audio files
-            let only_non_audio = remaining_files.iter()
-                .all(|p| p.is_dir() || !utils::is_audio_file(p));
-
-            if remaining_files.is_empty() || only_non_audio {
-                // Remove any leftover non-audio files first
-                for file in remaining_files.iter().filter(|p| p.is_file()) {
-                    if let Err(e) = fs::remove_file(file) {
-                        logger::debug(
-                            &format!("Failed to remove leftover file {}: {}", file.display(), e),
-                            false,
-                        );
-                    } else {
-                        logger::debug(
-                            &format!("Removed leftover file: {}", file.display()),
-                            false,
-                        );
-                    }
-                }
-
-                // Now remove the directory
-                if let Err(e) = fs::remove_dir(&parent_path) {
-                    logger::debug(
-                        &format!("Failed to remove directory {}: {}", parent_path.display(), e),
-                        false,
-                    );
-                } else {
-                    logger::debug(
-                        &format!("Removed directory: {}", parent_path.display()),
-                        false,
-                    );
-                    // Recursively check parent directories
-                    cleanup_empty_dirs(&parent_path, root_dir);
-                }
-            }
-        }
+        // Use the shared utility function
+        utils::cleanup_empty_directory(parent, root_dir, false);
     }
 }
 

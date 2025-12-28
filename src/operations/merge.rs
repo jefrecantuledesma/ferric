@@ -373,93 +373,10 @@ fn cleanup_empty_directories(
         depth_b.cmp(&depth_a) // Reverse order (deepest first)
     });
 
-    // Also collect parent directories to check
-    let mut all_dirs_to_check: Vec<PathBuf> = Vec::new();
-    for dir in &sorted_dirs {
-        all_dirs_to_check.push(dir.clone());
-        // Add all parent directories up to root
-        let mut current = dir.clone();
-        while let Some(parent) = current.parent() {
-            if parent == root_dir || parent.as_os_str().is_empty() {
-                break;
-            }
-            if !all_dirs_to_check.contains(&parent.to_path_buf()) {
-                all_dirs_to_check.push(parent.to_path_buf());
-            }
-            current = parent.to_path_buf();
-        }
-    }
-
-    // Sort again by depth
-    all_dirs_to_check.sort_by(|a, b| {
-        let depth_a = a.components().count();
-        let depth_b = b.components().count();
-        depth_b.cmp(&depth_a)
-    });
-
-    // Try to remove each directory if it's empty or only contains non-audio files
-    for dir in all_dirs_to_check {
-        if !dir.exists() {
-            continue;
-        }
-
-        // Check directory contents
-        match fs::read_dir(&dir) {
-            Ok(entries) => {
-                let remaining_files: Vec<PathBuf> = entries
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.path())
-                    .collect();
-
-                // Check if directory is empty or only contains non-audio files
-                let only_non_audio = remaining_files.iter()
-                    .all(|p| p.is_dir() || !utils::is_audio_file(p));
-
-                if remaining_files.is_empty() || only_non_audio {
-                    // Remove any leftover non-audio files first
-                    for file in remaining_files.iter().filter(|p| p.is_file()) {
-                        if let Err(e) = fs::remove_file(file) {
-                            logger::debug(
-                                &format!("Failed to remove leftover file {}: {}", file.display(), e),
-                                verbose,
-                            );
-                        } else {
-                            logger::debug(
-                                &format!("Removed leftover file: {}", file.display()),
-                                verbose,
-                            );
-                        }
-                    }
-
-                    // Now remove the directory
-                    match fs::remove_dir(&dir) {
-                        Ok(_) => {
-                            logger::debug(
-                                &format!("Removed empty directory: {}", dir.display()),
-                                verbose,
-                            );
-                            removed_count += 1;
-                        }
-                        Err(e) => {
-                            logger::debug(
-                                &format!(
-                                    "Could not remove directory {}: {}",
-                                    dir.display(),
-                                    e
-                                ),
-                                verbose,
-                            );
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                logger::debug(
-                    &format!("Could not read directory {}: {}", dir.display(), e),
-                    verbose,
-                );
-            }
-        }
+    // Clean up each directory using the shared utility function
+    // The utility handles recursion up to the root automatically
+    for dir in sorted_dirs {
+        removed_count += utils::cleanup_empty_directory(&dir, root_dir, verbose);
     }
 
     removed_count

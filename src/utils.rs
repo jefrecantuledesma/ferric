@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::fs;
 
 /// Sanitize a string for use as a filename/folder name
 /// - Replaces forward slashes with en-dash
@@ -177,6 +178,99 @@ pub fn normalize_name(name: &str, lowercase: bool) -> String {
     result.trim().to_string()
 }
 
+/// Recursively remove empty directories and directories containing only non-audio files
+///
+/// This function cleans up a directory after files have been moved out of it.
+/// It will:
+/// 1. Remove any leftover non-audio files (like .png, .jpg, .txt)
+/// 2. Remove the directory if it's empty or only had non-audio files
+/// 3. Recursively check parent directories up to (but not including) the root
+///
+/// # Arguments
+/// * `dir_path` - The directory to check and potentially remove
+/// * `root_dir` - The root directory to stop at (will not be removed)
+/// * `verbose` - Whether to log debug messages
+///
+/// # Returns
+/// The number of directories removed
+pub fn cleanup_empty_directory(dir_path: &Path, root_dir: &Path, verbose: bool) -> usize {
+    let mut removed_count = 0;
+
+    // Don't remove the root directory itself
+    if dir_path == root_dir || !dir_path.exists() {
+        return 0;
+    }
+
+    // Check directory contents
+    match fs::read_dir(dir_path) {
+        Ok(entries) => {
+            let remaining_files: Vec<PathBuf> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .collect();
+
+            // Check if directory is empty or only contains non-audio files
+            let only_non_audio = remaining_files.iter()
+                .all(|p| p.is_dir() || !is_audio_file(p));
+
+            if remaining_files.is_empty() || only_non_audio {
+                // Remove any leftover non-audio files first
+                for file in remaining_files.iter().filter(|p| p.is_file()) {
+                    if let Err(e) = fs::remove_file(file) {
+                        if verbose {
+                            crate::logger::debug(
+                                &format!("Failed to remove leftover file {}: {}", file.display(), e),
+                                verbose,
+                            );
+                        }
+                    } else if verbose {
+                        crate::logger::debug(
+                            &format!("Removed leftover file: {}", file.display()),
+                            verbose,
+                        );
+                    }
+                }
+
+                // Now remove the directory
+                match fs::remove_dir(dir_path) {
+                    Ok(_) => {
+                        if verbose {
+                            crate::logger::debug(
+                                &format!("Removed empty directory: {}", dir_path.display()),
+                                verbose,
+                            );
+                        }
+                        removed_count += 1;
+
+                        // Recursively check parent directory
+                        if let Some(parent) = dir_path.parent() {
+                            removed_count += cleanup_empty_directory(parent, root_dir, verbose);
+                        }
+                    }
+                    Err(e) => {
+                        if verbose {
+                            crate::logger::debug(
+                                &format!("Could not remove directory {}: {}", dir_path.display(), e),
+                                verbose,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            if verbose {
+                crate::logger::debug(
+                    &format!("Could not read directory {}: {}", dir_path.display(), e),
+                    verbose,
+                );
+            }
+        }
+    }
+
+    removed_count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +311,64 @@ mod tests {
         assert_eq!(normalize_name("LOUD  NOISES", true), "loud noises");
         assert_eq!(normalize_name("Can't Stop", false), "Can't Stop");
         assert_eq!(normalize_name("LOUD  NOISES", false), "LOUD NOISES");
+    }
+
+    #[test]
+    fn test_cleanup_empty_directory() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create nested empty directories
+        let dir1 = root.join("level1/level2/level3");
+        fs::create_dir_all(&dir1).unwrap();
+
+        // Cleanup should remove all nested directories
+        let removed = cleanup_empty_directory(&dir1, root, false);
+        assert_eq!(removed, 3); // level3, level2, level1
+        assert!(!root.join("level1").exists());
+    }
+
+    #[test]
+    fn test_cleanup_removes_non_audio_files() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        let dir1 = root.join("test_dir");
+        fs::create_dir_all(&dir1).unwrap();
+
+        // Add non-audio file
+        let cover = dir1.join("cover.png");
+        fs::write(&cover, "fake image").unwrap();
+
+        // Cleanup should remove the non-audio file and directory
+        let removed = cleanup_empty_directory(&dir1, root, false);
+        assert_eq!(removed, 1);
+        assert!(!cover.exists());
+        assert!(!dir1.exists());
+    }
+
+    #[test]
+    fn test_cleanup_preserves_audio_files() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        let dir1 = root.join("test_dir");
+        fs::create_dir_all(&dir1).unwrap();
+
+        // Add audio file
+        let audio = dir1.join("track.flac");
+        fs::write(&audio, "fake audio").unwrap();
+
+        // Cleanup should NOT remove directory with audio
+        let removed = cleanup_empty_directory(&dir1, root, false);
+        assert_eq!(removed, 0);
+        assert!(dir1.exists());
+        assert!(audio.exists());
     }
 }
