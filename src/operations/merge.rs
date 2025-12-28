@@ -7,7 +7,7 @@ use crate::utils;
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -192,6 +192,9 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
             .progress_chars("█▓▒░"),
     );
 
+    // Track source directories for cleanup when using --move
+    let moved_from_dirs: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+
     for file_info in &file_infos {
         pb2.inc(1);
         stats.processed += 1;
@@ -288,6 +291,13 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
 
                 match result {
                     Ok(_) => {
+                        // Track source directory for cleanup if we moved the file
+                        if options.do_move && action_type != "upgrade" {
+                            if let Some(parent) = file_info.path.parent() {
+                                moved_from_dirs.lock().unwrap().insert(parent.to_path_buf());
+                            }
+                        }
+
                         if action_type == "upgrade" {
                             logger::debug(
                                 &format!(
@@ -323,10 +333,246 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
 
     pb2.finish_and_clear();
 
+    // Phase 3: Clean up empty directories if we moved files
+    if options.do_move && !options.dry_run {
+        let dirs_to_check = moved_from_dirs.lock().unwrap().clone();
+        if !dirs_to_check.is_empty() {
+            logger::info(&format!(
+                "Cleaning up empty directories ({} directories to check)...",
+                dirs_to_check.len()
+            ));
+            let removed = cleanup_empty_directories(&options.input_dir, dirs_to_check, options.verbose);
+            if removed > 0 {
+                logger::success(&format!("Removed {} empty directories", removed));
+            }
+        }
+    }
+
     logger::success(&format!(
         "Merge complete: {} files added, {} files upgraded",
         added_count, replaced_count
     ));
     stats.print_summary("Library Merge");
     Ok(stats)
+}
+
+/// Remove empty directories recursively, working from deepest to shallowest
+/// Returns the number of directories removed
+fn cleanup_empty_directories(
+    root_dir: &PathBuf,
+    directories: HashSet<PathBuf>,
+    verbose: bool,
+) -> usize {
+    let mut removed_count = 0;
+
+    // Sort directories by depth (deepest first) to ensure we clean from bottom up
+    let mut sorted_dirs: Vec<PathBuf> = directories.into_iter().collect();
+    sorted_dirs.sort_by(|a, b| {
+        let depth_a = a.components().count();
+        let depth_b = b.components().count();
+        depth_b.cmp(&depth_a) // Reverse order (deepest first)
+    });
+
+    // Also collect parent directories to check
+    let mut all_dirs_to_check: Vec<PathBuf> = Vec::new();
+    for dir in &sorted_dirs {
+        all_dirs_to_check.push(dir.clone());
+        // Add all parent directories up to root
+        let mut current = dir.clone();
+        while let Some(parent) = current.parent() {
+            if parent == root_dir || parent.as_os_str().is_empty() {
+                break;
+            }
+            if !all_dirs_to_check.contains(&parent.to_path_buf()) {
+                all_dirs_to_check.push(parent.to_path_buf());
+            }
+            current = parent.to_path_buf();
+        }
+    }
+
+    // Sort again by depth
+    all_dirs_to_check.sort_by(|a, b| {
+        let depth_a = a.components().count();
+        let depth_b = b.components().count();
+        depth_b.cmp(&depth_a)
+    });
+
+    // Try to remove each directory if it's empty or only contains non-audio files
+    for dir in all_dirs_to_check {
+        if !dir.exists() {
+            continue;
+        }
+
+        // Check directory contents
+        match fs::read_dir(&dir) {
+            Ok(entries) => {
+                let remaining_files: Vec<PathBuf> = entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .collect();
+
+                // Check if directory is empty or only contains non-audio files
+                let only_non_audio = remaining_files.iter()
+                    .all(|p| p.is_dir() || !utils::is_audio_file(p));
+
+                if remaining_files.is_empty() || only_non_audio {
+                    // Remove any leftover non-audio files first
+                    for file in remaining_files.iter().filter(|p| p.is_file()) {
+                        if let Err(e) = fs::remove_file(file) {
+                            logger::debug(
+                                &format!("Failed to remove leftover file {}: {}", file.display(), e),
+                                verbose,
+                            );
+                        } else {
+                            logger::debug(
+                                &format!("Removed leftover file: {}", file.display()),
+                                verbose,
+                            );
+                        }
+                    }
+
+                    // Now remove the directory
+                    match fs::remove_dir(&dir) {
+                        Ok(_) => {
+                            logger::debug(
+                                &format!("Removed empty directory: {}", dir.display()),
+                                verbose,
+                            );
+                            removed_count += 1;
+                        }
+                        Err(e) => {
+                            logger::debug(
+                                &format!(
+                                    "Could not remove directory {}: {}",
+                                    dir.display(),
+                                    e
+                                ),
+                                verbose,
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                logger::debug(
+                    &format!("Could not read directory {}: {}", dir.display(), e),
+                    verbose,
+                );
+            }
+        }
+    }
+
+    removed_count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_cleanup_empty_directories() {
+        // Create temporary test directory
+        let temp_root = TempDir::new().unwrap();
+        let root_path = temp_root.path().to_path_buf();
+
+        // Create nested directory structure
+        let dir1 = root_path.join("artist1/album1");
+        let dir2 = root_path.join("artist1/album2");
+        let dir3 = root_path.join("artist2/album3");
+        fs::create_dir_all(&dir1).unwrap();
+        fs::create_dir_all(&dir2).unwrap();
+        fs::create_dir_all(&dir3).unwrap();
+
+        // Track directories for cleanup
+        let mut dirs_to_check = HashSet::new();
+        dirs_to_check.insert(dir1.clone());
+        dirs_to_check.insert(dir2.clone());
+        dirs_to_check.insert(dir3.clone());
+
+        // Run cleanup
+        let removed = cleanup_empty_directories(&root_path, dirs_to_check, false);
+
+        // All empty directories should be removed, including parents
+        assert_eq!(removed, 5); // album1, album2, album3, artist1, artist2
+        assert!(!dir1.exists());
+        assert!(!dir2.exists());
+        assert!(!dir3.exists());
+        assert!(!root_path.join("artist1").exists());
+        assert!(!root_path.join("artist2").exists());
+    }
+
+    #[test]
+    fn test_cleanup_removes_non_audio_files() {
+        // Create temporary test directory
+        let temp_root = TempDir::new().unwrap();
+        let root_path = temp_root.path().to_path_buf();
+
+        // Create directory with non-audio file
+        let dir1 = root_path.join("artist1/album1");
+        fs::create_dir_all(&dir1).unwrap();
+        let cover_file = dir1.join("cover.png");
+        fs::write(&cover_file, "fake album art").unwrap();
+
+        // Track directory for cleanup
+        let mut dirs_to_check = HashSet::new();
+        dirs_to_check.insert(dir1.clone());
+
+        // Run cleanup
+        let removed = cleanup_empty_directories(&root_path, dirs_to_check, false);
+
+        // Directory and non-audio file should be removed
+        assert!(removed >= 1);
+        assert!(!cover_file.exists());
+        assert!(!dir1.exists());
+    }
+
+    #[test]
+    fn test_cleanup_preserves_directories_with_audio() {
+        // Create temporary test directory
+        let temp_root = TempDir::new().unwrap();
+        let root_path = temp_root.path().to_path_buf();
+
+        // Create directory with audio file
+        let dir1 = root_path.join("artist1/album1");
+        fs::create_dir_all(&dir1).unwrap();
+        let audio_file = dir1.join("track.flac");
+        fs::write(&audio_file, "fake audio data").unwrap();
+
+        // Track directory for cleanup
+        let mut dirs_to_check = HashSet::new();
+        dirs_to_check.insert(dir1.clone());
+
+        // Run cleanup
+        let removed = cleanup_empty_directories(&root_path, dirs_to_check, false);
+
+        // Directory with audio file should NOT be removed
+        assert_eq!(removed, 0);
+        assert!(dir1.exists());
+        assert!(audio_file.exists());
+    }
+
+    #[test]
+    fn test_cleanup_stops_at_root() {
+        // Create temporary test directory
+        let temp_root = TempDir::new().unwrap();
+        let root_path = temp_root.path().to_path_buf();
+
+        // Create empty directory
+        let dir1 = root_path.join("empty_dir");
+        fs::create_dir_all(&dir1).unwrap();
+
+        // Track directory for cleanup
+        let mut dirs_to_check = HashSet::new();
+        dirs_to_check.insert(dir1.clone());
+
+        // Run cleanup
+        cleanup_empty_directories(&root_path, dirs_to_check, false);
+
+        // Root should still exist (not removed)
+        assert!(root_path.exists());
+        // Empty subdirectory should be removed
+        assert!(!dir1.exists());
+    }
 }
