@@ -65,6 +65,42 @@ impl AudioMetadata {
         Ok(metadata)
     }
 
+    /// Normalize a tag key for case-insensitive, whitespace-insensitive matching
+    ///
+    /// Converts to lowercase and removes all non-alphanumeric characters.
+    /// This allows matching variations like:
+    /// - "Album Artist", "album_artist", "ALBUM-ARTIST" all become "albumartist"
+    /// - "GENRE", "Genre", "genre" all become "genre"
+    fn normalize_tag_key(key: &str) -> String {
+        key.to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .collect()
+    }
+
+    /// Get a tag value with fuzzy matching (case-insensitive, separator-insensitive)
+    ///
+    /// Fast path: tries exact match first (covers 99% of cases)
+    /// Slow path: normalizes keys and does fuzzy matching
+    fn get_tag_fuzzy(tags: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
+        // Fast path: try exact match first (most common case)
+        if let Some(val) = tags.get(key).and_then(|v| v.as_str()) {
+            return Some(val.to_string());
+        }
+
+        // Normalize the search key
+        let normalized_key = Self::normalize_tag_key(key);
+
+        // Slow path: fuzzy match by normalizing all tag keys
+        for (k, v) in tags {
+            if Self::normalize_tag_key(k) == normalized_key {
+                return v.as_str().map(String::from);
+            }
+        }
+
+        None
+    }
+
     /// Extract metadata using ffprobe (fallback method, more reliable)
     fn from_file_ffprobe(path: &Path) -> Result<Self> {
         let output = Command::new("ffprobe")
@@ -110,45 +146,18 @@ impl AudioMetadata {
 
                     // Extract tags from stream (OPUS/OGG files store tags here)
                     if let Some(tags) = stream.get("tags").and_then(|t| t.as_object()) {
-                        metadata.artist = tags
-                            .get("artist")
-                            .or_else(|| tags.get("ARTIST"))
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
-                        metadata.album = tags
-                            .get("album")
-                            .or_else(|| tags.get("ALBUM"))
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
-                        metadata.album_artist = tags
-                            .get("album_artist")
-                            .or_else(|| tags.get("ALBUM_ARTIST"))
-                            .or_else(|| tags.get("albumartist"))
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
-                        metadata.title = tags
-                            .get("title")
-                            .or_else(|| tags.get("TITLE"))
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
-                        metadata.date = tags
-                            .get("date")
-                            .or_else(|| tags.get("DATE"))
-                            .or_else(|| tags.get("year"))
-                            .or_else(|| tags.get("YEAR"))
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
-                        metadata.genre = tags
-                            .get("genre")
-                            .or_else(|| tags.get("GENRE"))
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
+                        metadata.artist = Self::get_tag_fuzzy(tags, "artist");
+                        metadata.album = Self::get_tag_fuzzy(tags, "album");
+                        metadata.album_artist = Self::get_tag_fuzzy(tags, "albumartist");
+                        metadata.title = Self::get_tag_fuzzy(tags, "title");
+                        metadata.genre = Self::get_tag_fuzzy(tags, "genre");
 
-                        if let Some(track_str) = tags
-                            .get("track")
-                            .or_else(|| tags.get("TRACK"))
-                            .and_then(|v| v.as_str())
-                        {
+                        // Date can be "date" or "year"
+                        metadata.date = Self::get_tag_fuzzy(tags, "date")
+                            .or_else(|| Self::get_tag_fuzzy(tags, "year"));
+
+                        // Track number
+                        if let Some(track_str) = Self::get_tag_fuzzy(tags, "track") {
                             if let Some(num_str) = track_str.split('/').next() {
                                 metadata.track_number = num_str.parse().ok();
                             }
@@ -165,58 +174,27 @@ impl AudioMetadata {
             if let Some(tags) = format.get("tags").and_then(|t| t.as_object()) {
                 // Only set if not already set from stream tags
                 if metadata.artist.is_none() {
-                    metadata.artist = tags
-                        .get("artist")
-                        .or_else(|| tags.get("ARTIST"))
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
+                    metadata.artist = Self::get_tag_fuzzy(tags, "artist");
                 }
                 if metadata.album.is_none() {
-                    metadata.album = tags
-                        .get("album")
-                        .or_else(|| tags.get("ALBUM"))
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
+                    metadata.album = Self::get_tag_fuzzy(tags, "album");
                 }
                 if metadata.album_artist.is_none() {
-                    metadata.album_artist = tags
-                        .get("album_artist")
-                        .or_else(|| tags.get("ALBUM_ARTIST"))
-                        .or_else(|| tags.get("albumartist"))
-                        .or_else(|| tags.get("ALBUMARTIST"))
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
+                    metadata.album_artist = Self::get_tag_fuzzy(tags, "albumartist");
                 }
                 if metadata.title.is_none() {
-                    metadata.title = tags
-                        .get("title")
-                        .or_else(|| tags.get("TITLE"))
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
+                    metadata.title = Self::get_tag_fuzzy(tags, "title");
                 }
                 if metadata.date.is_none() {
-                    metadata.date = tags
-                        .get("date")
-                        .or_else(|| tags.get("DATE"))
-                        .or_else(|| tags.get("year"))
-                        .or_else(|| tags.get("YEAR"))
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
+                    metadata.date = Self::get_tag_fuzzy(tags, "date")
+                        .or_else(|| Self::get_tag_fuzzy(tags, "year"));
                 }
                 if metadata.genre.is_none() {
-                    metadata.genre = tags
-                        .get("genre")
-                        .or_else(|| tags.get("GENRE"))
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
+                    metadata.genre = Self::get_tag_fuzzy(tags, "genre");
                 }
 
                 if metadata.track_number.is_none() {
-                    if let Some(track_str) = tags
-                        .get("track")
-                        .or_else(|| tags.get("TRACK"))
-                        .and_then(|v| v.as_str())
-                    {
+                    if let Some(track_str) = Self::get_tag_fuzzy(tags, "track") {
                         if let Some(num_str) = track_str.split('/').next() {
                             metadata.track_number = num_str.parse().ok();
                         }
@@ -497,5 +475,92 @@ mod tests {
         assert_eq!(artist, Some("Babe Haven".to_string()));
         assert_eq!(album, Some("Nuisance".to_string()));
         assert_eq!(title, Some("Gas Pedal".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_tag_key() {
+        // Test case normalization
+        assert_eq!(AudioMetadata::normalize_tag_key("ARTIST"), "artist");
+        assert_eq!(AudioMetadata::normalize_tag_key("Artist"), "artist");
+        assert_eq!(AudioMetadata::normalize_tag_key("artist"), "artist");
+
+        // Test whitespace removal
+        assert_eq!(AudioMetadata::normalize_tag_key("Album Artist"), "albumartist");
+        assert_eq!(AudioMetadata::normalize_tag_key("album artist"), "albumartist");
+
+        // Test separator removal
+        assert_eq!(AudioMetadata::normalize_tag_key("album_artist"), "albumartist");
+        assert_eq!(AudioMetadata::normalize_tag_key("album-artist"), "albumartist");
+        assert_eq!(AudioMetadata::normalize_tag_key("ALBUM_ARTIST"), "albumartist");
+
+        // Test combination
+        assert_eq!(AudioMetadata::normalize_tag_key("Album-Artist"), "albumartist");
+        assert_eq!(AudioMetadata::normalize_tag_key("ALBUM ARTIST"), "albumartist");
+    }
+
+    #[test]
+    fn test_get_tag_fuzzy() {
+        use serde_json::json;
+
+        // Test exact match (fast path)
+        let tags_exact = json!({
+            "artist": "The Beatles",
+            "album": "Abbey Road"
+        });
+        let tags_map = tags_exact.as_object().unwrap();
+
+        assert_eq!(
+            AudioMetadata::get_tag_fuzzy(tags_map, "artist"),
+            Some("The Beatles".to_string())
+        );
+
+        // Test uppercase tags (common in FLAC)
+        let tags_upper = json!({
+            "ARTIST": "Babe Haven",
+            "ALBUM": "Nuisance",
+            "GENRE": "Hardcore"
+        });
+        let tags_map = tags_upper.as_object().unwrap();
+
+        assert_eq!(
+            AudioMetadata::get_tag_fuzzy(tags_map, "artist"),
+            Some("Babe Haven".to_string())
+        );
+        assert_eq!(
+            AudioMetadata::get_tag_fuzzy(tags_map, "album"),
+            Some("Nuisance".to_string())
+        );
+        assert_eq!(
+            AudioMetadata::get_tag_fuzzy(tags_map, "genre"),
+            Some("Hardcore".to_string())
+        );
+
+        // Test variations with spaces and separators
+        // Each variation should be tested separately since they all normalize to the same key
+        let tags_space = json!({"Album Artist": "Various Artists"});
+        assert_eq!(
+            AudioMetadata::get_tag_fuzzy(tags_space.as_object().unwrap(), "albumartist"),
+            Some("Various Artists".to_string())
+        );
+
+        let tags_underscore = json!({"album_artist": "Compilation"});
+        assert_eq!(
+            AudioMetadata::get_tag_fuzzy(tags_underscore.as_object().unwrap(), "albumartist"),
+            Some("Compilation".to_string())
+        );
+
+        let tags_hyphen = json!({"ALBUM-ARTIST": "VA"});
+        assert_eq!(
+            AudioMetadata::get_tag_fuzzy(tags_hyphen.as_object().unwrap(), "albumartist"),
+            Some("VA".to_string())
+        );
+
+        // Test missing tag
+        let tags_missing = json!({
+            "artist": "Someone"
+        });
+        let tags_map = tags_missing.as_object().unwrap();
+
+        assert_eq!(AudioMetadata::get_tag_fuzzy(tags_map, "album"), None);
     }
 }
