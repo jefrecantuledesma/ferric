@@ -14,6 +14,7 @@ pub struct UnifiedOptions {
     pub force: bool,
     pub destructive: bool,
     pub dry_run: bool,
+    pub yes: bool,
     pub verbose: bool,
     pub config: Config,
 }
@@ -36,6 +37,12 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
         logger::info(&format!("Convert to: {}", format));
         if options.delete_originals {
             logger::info("Delete originals: YES - will delete originals after conversion");
+        } else {
+            logger::warning(&format!(
+                "Note: original files will be kept alongside {} conversions in the output directory. \
+                Pass --delete-originals to keep only the target format.",
+                format
+            ));
         }
     } else {
         logger::info("Convert: NO");
@@ -46,7 +53,7 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
     }
 
     // Confirm with user
-    if !options.dry_run {
+    if !options.dry_run && !options.yes {
         logger::warning("\nYou are about to run the unified pipeline:");
         logger::info("  1. Sort into Artist/Album structure (quality-aware)");
         if should_convert {
@@ -111,8 +118,16 @@ pub fn run(options: UnifiedOptions) -> Result<()> {
             "\n[{}/{}] Converting to {}...",
             current_step, total_steps, format
         ));
+        // In dry-run mode the output_dir doesn't exist yet (sort didn't write anything),
+        // so preview conversions from the source directory instead.
+        let convert_input = if options.dry_run {
+            logger::info("(Previewing from source directory — output not created in dry-run)");
+            options.input_dir.clone()
+        } else {
+            options.output_dir.clone()
+        };
         let convert_opts = convert::ConvertOptions {
-            input_dir: options.output_dir.clone(),
+            input_dir: convert_input,
             output_dir: options.output_dir.clone(),
             output_format: options.output_format.clone(),
             delete_original: options.delete_originals,

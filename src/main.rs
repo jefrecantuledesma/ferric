@@ -302,6 +302,10 @@ enum Commands {
         /// Delete lower quality duplicate files during sort (use with caution!)
         #[arg(long)]
         destructive: bool,
+
+        /// Skip confirmation prompt (for scripting/automation)
+        #[arg(short, long)]
+        yes: bool,
     },
 }
 
@@ -513,6 +517,7 @@ async fn main() -> Result<()> {
             convert_down,
             force,
             destructive,
+            yes,
         } => {
             let opts = unified::UnifiedOptions {
                 input_dir: input,
@@ -524,6 +529,7 @@ async fn main() -> Result<()> {
                 force,
                 destructive,
                 dry_run: cli.dry_run,
+                yes,
                 verbose: cli.verbose,
                 config,
             };

@@ -261,11 +261,13 @@ pub fn run(options: MergeOptions) -> Result<OperationStats> {
                         ),
                         options.verbose,
                     );
+                    replaced_count += 1;
                 } else {
                     logger::debug(
                         &format!("Would add: {}", target_path.display()),
                         options.verbose,
                     );
+                    added_count += 1;
                 }
                 stats.succeeded += 1;
             } else {
